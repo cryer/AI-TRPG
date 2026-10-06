@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 from voice.llm.splitter import split_sentences
 from voice.metrics import MetricsSink, render_turn_waterfall
@@ -56,13 +56,17 @@ class _Capture:
 
 class TurnManager:
     def __init__(self, *, vad: SileroVAD, asr, llm, tts, player,
-                 cfg: dict, system_prompt: str):
+                 cfg: dict, system_prompt: str | Callable[[], str],
+                 responder: Callable[[list[dict], int], AsyncIterator[str]] | None = None):
         self.vad = vad
         self.asr = asr
         self.llm = llm
         self.tts = tts
         self.player = player
+        # system_prompt 可为可调用对象（每轮 LLM 调用前重新解析，游戏模式用）
         self.system_prompt = system_prompt
+        # responder 非 None 时代替 llm.stream 产出 token 流（游戏模式的工具调用循环）
+        self.responder = responder
         self.endpoint_ms = cfg.get("endpoint_ms", 400)
         self.final_grace_ms = cfg.get("final_grace_ms", 150)
         self.asr_catchup_ms = cfg.get("asr_catchup_ms", 400)
@@ -355,7 +359,9 @@ class TurnManager:
                 return
             self.history.append({"role": "user", "content": text})
             user_idx = len(self.history) - 1
-            messages = [{"role": "system", "content": self.system_prompt}] + self.history
+            prompt = (self.system_prompt() if callable(self.system_prompt)
+                      else self.system_prompt)
+            messages = [{"role": "system", "content": prompt}] + self.history
 
             self.player.start_gen(gen_id)
             async for chunk in self.tts.synth(
@@ -433,7 +439,9 @@ class TurnManager:
     async def _sentence_stream(self, messages: list[dict], gen_id: int, ts: dict,
                                reply_parts: list[str], turn_id: int) -> AsyncIterator[str]:
         async def tokens():
-            async for tok in self.llm.stream(messages, gen_id):
+            source = (self.responder(messages, gen_id) if self.responder is not None
+                      else self.llm.stream(messages, gen_id))
+            async for tok in source:
                 if "t_llm_first_token" not in ts:
                     ts["t_llm_first_token"] = time.monotonic()
                 reply_parts.append(tok)

@@ -152,10 +152,19 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     print(f"[web] 拨入：{peer}")
 
     player = WsPlayer(ws)
+    # 游戏模式：GameAgent 持有每玩家的 GameEngine，必须每连接新建（llm 无状态可共享）
+    agent = None
+    if "game" in cfg:
+        from game.agent import GameAgent
+        agent = GameAgent(cfg, app["llm"])
     tm = TurnManager(vad=_make_vad(cfg), asr=_SlotProxy(app, "asr"),
                      llm=app["llm"], tts=_SlotProxy(app, "tts"),
                      player=player, cfg=cfg,
-                     system_prompt=cfg.get("system_prompt", SYSTEM_PROMPT))
+                     system_prompt=(agent.system_prompt if agent is not None
+                                    else cfg.get("system_prompt", SYSTEM_PROMPT)))
+    if agent is not None:
+        agent.history = tm.history   # 共享同一列表对象
+        tm.responder = agent.respond
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     jsonl_path = Path(app["out"]) / f"web_{stamp}.jsonl"
     try:

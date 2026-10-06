@@ -87,8 +87,20 @@ async def amain(args) -> None:
         except Exception as e:
             print(f"[warn] TTS 预热失败：{e}")
 
+    # 游戏模式（AGENTS.md §2.2）：cfg 带 "game" 段时由 GameAgent 接管
+    # system prompt（可调用，每轮解析）与 token 产出（responder，含工具调用循环）
+    agent = None
+    if "game" in cfg:
+        from game.agent import GameAgent
+        agent = GameAgent(cfg, llm)
+        print(f"[game] 已加载 {len(agent.adventures)} 个剧本，进入推荐员模式")
     tm = TurnManager(vad=vad, asr=asr, llm=llm, tts=tts, player=player,
-                     cfg=cfg, system_prompt=cfg.get("system_prompt", SYSTEM_PROMPT))
+                     cfg=cfg,
+                     system_prompt=(agent.system_prompt if agent is not None
+                                    else cfg.get("system_prompt", SYSTEM_PROMPT)))
+    if agent is not None:
+        agent.history = tm.history   # 共享同一列表对象
+        tm.responder = agent.respond
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     jsonl_path = Path(args.out) / f"m2_{stamp}.jsonl"

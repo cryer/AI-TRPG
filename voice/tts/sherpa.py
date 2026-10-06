@@ -72,6 +72,10 @@ class SherpaOnnxTTS:
         tts = self._get_tts()
         audio = tts.generate(text, sid=self.speaker_id, speed=self.speed)
         samples = np.asarray(audio.samples, dtype=np.float32)
+        # 整句都是 OOV 字符（如纯标点「」）时 sherpa 转换失败，返回空音频且
+        # sample_rate=0——直接当空句处理，不能进 ratecv（会抛 sampling rate）
+        if audio.sample_rate <= 0 or samples.size == 0:
+            return b""
         samples = np.clip(samples, -1.0, 1.0)
         pcm_native = (samples * 32767.0).astype(np.int16).tobytes()
         if audio.sample_rate != self.sample_rate:
@@ -84,7 +88,15 @@ class SherpaOnnxTTS:
         seq = 0
         chunk_bytes = self.sample_rate * 2 * CHUNK_MS // 1000
         async for sentence in sentences:
-            pcm = await loop.run_in_executor(None, self._synth_sync, sentence)
+            try:
+                pcm = await loop.run_in_executor(None, self._synth_sync, sentence)
+            except Exception as e:
+                # 单句合成失败不能炸掉整个回合（DM 长叙述里一句坏句就静默
+                # 中断是体验灾难）——记日志跳过，后续句子照常合成
+                print(f"[warn] TTS 合成失败，跳过该句 {sentence[:20]!r}: {e!r}")
+                continue
+            if not pcm:
+                continue
             for off in range(0, len(pcm), chunk_bytes):
                 yield AudioChunk(pcm=pcm[off:off + chunk_bytes], gen_id=gen_id, seq=seq)
                 seq += 1

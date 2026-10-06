@@ -38,7 +38,8 @@
   },
   "kimi": {
     "model": "kimi-for-coding-highspeed",
-    "reasoning_effort": "low"
+    "reasoning_effort": "low",
+    "max_tokens": 800
   },
   "volcengine_asr": {
     "resource_id": "volc.seedasr.sauc.duration"
