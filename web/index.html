@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Voice Agent</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(ellipse at 50% 40%, #16213e 0%, #0b1020 60%, #070a14 100%);
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; font-family: system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none;
+  }
+  #stage { position: relative; width: 340px; height: 340px; }
+  canvas { position: absolute; inset: 0; }
+  #btn {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 88px; height: 88px; border-radius: 50%; border: none; cursor: pointer;
+    background: #1db954; color: #fff; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 0 0 rgba(29,185,84,.45), 0 8px 32px rgba(0,0,0,.5);
+    transition: background .25s, box-shadow .25s, transform .1s;
+    outline: none;
+  }
+  #btn:active { transform: translate(-50%,-50%) scale(.95); }
+  #btn.oncall { background: #e5484d; box-shadow: 0 0 0 0 rgba(229,72,77,.45), 0 8px 32px rgba(0,0,0,.5); }
+  #btn.connecting { background: #d9a514; animation: pulse 1.1s ease-out infinite; }
+  #btn.oncall { animation: pulse-on 2.2s ease-out infinite; }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(217,165,20,.5), 0 8px 32px rgba(0,0,0,.5); }
+    100% { box-shadow: 0 0 0 26px rgba(217,165,20,0), 0 8px 32px rgba(0,0,0,.5); }
+  }
+  @keyframes pulse-on {
+    0% { box-shadow: 0 0 0 0 rgba(229,72,77,.35), 0 8px 32px rgba(0,0,0,.5); }
+    100% { box-shadow: 0 0 0 30px rgba(229,72,77,0), 0 8px 32px rgba(0,0,0,.5); }
+  }
+  #btn svg { width: 38px; height: 38px; fill: currentColor; }
+  #btn.oncall svg { transform: rotate(135deg); }
+
+  /* ---- provider 切换开关（右上） ---- */
+  #switches {
+    position: fixed; top: 22px; right: 24px; display: flex; flex-direction: column;
+    gap: 10px; z-index: 10;
+  }
+  .sw {
+    display: flex; align-items: center; gap: 10px;
+    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1);
+    border-radius: 999px; padding: 5px 6px 5px 14px;
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 4px 18px rgba(0,0,0,.35);
+    transition: opacity .2s;
+  }
+  .sw.loading { opacity: .45; pointer-events: none; }
+  .sw-label { font-size: 12px; letter-spacing: .12em; color: rgba(255,255,255,.55); }
+  .seg { position: relative; display: flex; background: rgba(0,0,0,.35); border-radius: 999px; padding: 3px; }
+  .seg button {
+    position: relative; z-index: 1; border: none; background: none; cursor: pointer;
+    color: rgba(255,255,255,.55); font-size: 12px; padding: 5px 14px; border-radius: 999px;
+    transition: color .25s; font-family: inherit;
+  }
+  .seg button.on { color: #0b1020; font-weight: 600; }
+  .seg .ind {
+    position: absolute; top: 3px; bottom: 3px; border-radius: 999px;
+    background: linear-gradient(135deg, #7dd3fc, #34d399);
+    transition: left .28s cubic-bezier(.6,.1,.2,1.2), width .28s cubic-bezier(.6,.1,.2,1.2);
+  }
+  .sw.shake { animation: shake .35s; }
+  @keyframes shake {
+    0%,100% { transform: translateX(0); } 25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+  }
+</style>
+</head>
+<body>
+<div id="switches">
+  <div class="sw" id="sw-asr">
+    <span class="sw-label">识别</span>
+    <div class="seg">
+      <div class="ind"></div>
+      <button data-v="sherpa">本地</button>
+      <button data-v="volcengine">云端</button>
+    </div>
+  </div>
+  <div class="sw" id="sw-tts">
+    <span class="sw-label">合成</span>
+    <div class="seg">
+      <div class="ind"></div>
+      <button data-v="sherpa">本地</button>
+      <button data-v="volcengine">云端</button>
+    </div>
+  </div>
+</div>
+<div id="stage">
+  <canvas id="wave" width="680" height="680" style="width:340px;height:340px"></canvas>
+  <button id="btn" aria-label="call">
+    <svg viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+  </button>
+</div>
+<script>
+'use strict';
+const btn = document.getElementById('btn');
+const canvas = document.getElementById('wave');
+const g = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height, CX = W / 2, CY = H / 2;
+const R0 = 132;            // 波纹内半径（px，canvas 坐标 680x680）
+const BARS = 72;
+
+let state = 'idle';        // idle | connecting | incall
+let ws = null, audioCtx = null, micStream = null, analyser = null;
+let workletNode = null, zeroGain = null;
+let playTime = 0, scheduled = [];
+let userLevel = 0, agentLevel = 0;
+const barVals = new Float32Array(BARS);
+
+// ---------- 通话生命周期 ----------
+
+async function startCall() {
+  state = 'connecting';
+  btn.className = 'connecting';
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
+    });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    await audioCtx.audioWorklet.addModule('pcm-worklet.js');
+    const src = audioCtx.createMediaStreamSource(micStream);
+
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    src.connect(analyser);
+
+    workletNode = new AudioWorkletNode(audioCtx, 'pcm-capture', {
+      processorOptions: { sampleRate: audioCtx.sampleRate }
+    });
+    workletNode.port.onmessage = (e) => {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(e.data);
+    };
+    zeroGain = audioCtx.createGain();
+    zeroGain.gain.value = 0;
+    src.connect(workletNode).connect(zeroGain).connect(audioCtx.destination);
+
+    await new Promise((resolve, reject) => {
+      ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = resolve;
+      ws.onerror = reject;
+      ws.onclose = () => { if (state !== 'idle') hangup(); };
+      ws.onmessage = onWsMessage;
+    });
+    state = 'incall';
+    btn.className = 'oncall';
+  } catch (err) {
+    console.error(err);
+    hangup();
+  }
+}
+
+function hangup() {
+  state = 'idle';
+  btn.className = '';
+  if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+  stopPlayback();
+  if (workletNode) { workletNode.disconnect(); workletNode = null; }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+  userLevel = agentLevel = 0;
+}
+
+// ---------- 下行音频：播放 + 电平 ----------
+
+function onWsMessage(e) {
+  if (typeof e.data === 'string') {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch (err) { return; }
+    if (msg.type === 'flush') stopPlayback();   // barge-in：立即静音
+    return;
+  }
+  const i16 = new Int16Array(e.data);
+  let sum = 0;
+  const buf = audioCtx.createBuffer(1, i16.length, 16000);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < i16.length; i++) {
+    const v = i16[i] / 32768;
+    ch[i] = v;
+    sum += v * v;
+  }
+  agentLevel = Math.min(1, Math.sqrt(sum / i16.length) * 5);
+
+  const s = audioCtx.createBufferSource();
+  s.buffer = buf;
+  s.connect(audioCtx.destination);
+  if (playTime < audioCtx.currentTime) playTime = audioCtx.currentTime + 0.06;
+  s.start(playTime);
+  playTime += buf.duration;
+  scheduled.push(s);
+}
+
+function stopPlayback() {
+  scheduled.forEach(s => { try { s.stop(); } catch (e) {} });
+  scheduled = [];
+  playTime = 0;
+  agentLevel = 0;
+}
+
+// ---------- 波纹动画 ----------
+
+const micBuf = new Float32Array(256);
+function sampleUserLevel() {
+  if (!analyser) { userLevel *= 0.9; return; }
+  analyser.getFloatTimeDomainData(micBuf);
+  let sum = 0;
+  for (let i = 0; i < micBuf.length; i++) sum += micBuf[i] * micBuf[i];
+  const rms = Math.sqrt(sum / micBuf.length);
+  userLevel = Math.max(Math.min(1, rms * 6), userLevel * 0.85);
+}
+
+function draw(t) {
+  requestAnimationFrame(draw);
+  g.clearRect(0, 0, W, H);
+  if (state === 'idle') {
+    // 待机：缓慢呼吸的淡色圆环
+    const r = R0 + Math.sin(t / 900) * 4;
+    g.beginPath();
+    g.arc(CX, CY, r, 0, Math.PI * 2);
+    g.strokeStyle = 'rgba(120,140,180,.25)';
+    g.lineWidth = 3;
+    g.stroke();
+    return;
+  }
+  sampleUserLevel();
+  agentLevel *= 0.94;
+  const level = Math.max(userLevel, agentLevel);
+  const speakingAgent = agentLevel > userLevel && agentLevel > 0.02;
+  // 用户=青绿，agent=蓝紫，过渡色按电平占比
+  const hue = speakingAgent ? 232 : 158;
+  const base = 6 + level * 64;
+
+  for (let i = 0; i < BARS; i++) {
+    const wave = 0.55 + 0.45 * Math.sin(t / 260 + i * 0.55);
+    const target = base * wave * (0.7 + 0.3 * Math.sin(t / 130 + i * 1.7));
+    barVals[i] += (target - barVals[i]) * 0.35;
+    const len = barVals[i];
+    const a = (i / BARS) * Math.PI * 2 - Math.PI / 2;
+    const x1 = CX + Math.cos(a) * R0, y1 = CY + Math.sin(a) * R0;
+    const x2 = CX + Math.cos(a) * (R0 + 10 + len), y2 = CY + Math.sin(a) * (R0 + 10 + len);
+    g.beginPath();
+    g.moveTo(x1, y1);
+    g.lineTo(x2, y2);
+    g.strokeStyle = `hsla(${hue}, 75%, ${55 + level * 20}%, ${0.35 + level * 0.6})`;
+    g.lineWidth = 5;
+    g.lineCap = 'round';
+    g.stroke();
+  }
+}
+requestAnimationFrame(draw);
+
+btn.addEventListener('click', () => {
+  if (state === 'idle') startCall();
+  else hangup();
+});
+
+// ---------- provider 切换开关 ----------
+
+function renderSwitch(el, active) {
+  const btns = [...el.querySelectorAll('.seg button')];
+  const ind = el.querySelector('.ind');
+  btns.forEach(b => b.classList.toggle('on', b.dataset.v === active));
+  const onBtn = btns.find(b => b.dataset.v === active);
+  if (onBtn) {
+    ind.style.left = onBtn.offsetLeft + 'px';
+    ind.style.width = onBtn.offsetWidth + 'px';
+  }
+}
+
+async function initSwitches() {
+  const swAsr = document.getElementById('sw-asr');
+  const swTts = document.getElementById('sw-tts');
+  try {
+    const r = await fetch('/api/providers');
+    const st = await r.json();
+    renderSwitch(swAsr, st.asr.active);
+    renderSwitch(swTts, st.tts.active);
+  } catch (e) { console.error('providers init failed', e); }
+
+  for (const [el, slot] of [[swAsr, 'asr'], [swTts, 'tts']]) {
+    el.querySelectorAll('.seg button').forEach(b => {
+      b.addEventListener('click', async () => {
+        const prev = el.querySelector('button.on').dataset.v;
+        const next = b.dataset.v;
+        if (next === prev) return;
+        renderSwitch(el, next);              // 乐观更新
+        el.classList.add('loading');         // 本地模型首次加载要数秒
+        try {
+          const r = await fetch('/api/providers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ [slot]: next })
+          });
+          if (!r.ok) throw new Error((await r.json()).error || r.status);
+        } catch (err) {
+          console.error('switch failed', err);
+          renderSwitch(el, prev);            // 回滚
+          el.classList.add('shake');
+          setTimeout(() => el.classList.remove('shake'), 400);
+        } finally {
+          el.classList.remove('loading');
+        }
+      });
+    });
+  }
+}
+initSwitches();
+</script>
+</body>
+</html>

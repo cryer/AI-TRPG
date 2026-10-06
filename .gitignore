@@ -1,0 +1,11 @@
+# 私有手册与密钥，永不入库
+AGENTS.md
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# 运行产物
+reports/
+certs/

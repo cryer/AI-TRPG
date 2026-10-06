@@ -1,0 +1,41 @@
+{
+  "sample_rate": 16000,
+  "frame_ms": 32,
+  "endpoint_ms": 300,
+  "final_grace_ms": 150,
+  "asr_catchup_ms": 400,
+  "bargein_confirm_ms": 200,
+  "system_prompt": "你是一个语音助手，回答简短口语化，每次只用一句话回答，不超过三十个字。",
+  "adaptive_endpoint": {"enabled": true, "extend_ms": 300, "min_complete_chars": 5},
+  "budget_ms": {
+    "vad_endpoint": 400,
+    "asr_final": 150,
+    "llm_first_sentence": 400,
+    "tts_first_chunk": 200,
+    "transport_buffer": 50,
+    "total": 1200,
+    "telephony_total": 1600
+  },
+  "vad": {
+    "model_path": "models/silero_vad.onnx",
+    "threshold": 0.5,
+    "neg_threshold": 0.35,
+    "min_speech_ms": 96
+  },
+  "providers": {
+    "asr": "volcengine",
+    "llm": "kimi",
+    "tts": "volcengine"
+  },
+  "volcengine_asr": {
+    "resource_id": "volc.seedasr.sauc.duration"
+  },
+  "kimi": {
+    "model": "kimi-for-coding-highspeed",
+    "reasoning_effort": "low"
+  },
+  "volcengine": {
+    "speaker": "zh_female_vv_uranus_bigtts",
+    "resource_id": "seed-tts-2.0"
+  }
+}

@@ -1,0 +1,7 @@
+numpy==1.26.4
+sounddevice==0.5.6
+onnxruntime==1.17.1
+websockets==16.1
+aiohttp==3.14.3
+python-dotenv==1.1.0
+sherpa-onnx==1.12.40

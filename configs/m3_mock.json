@@ -1,0 +1,37 @@
+{
+  "sample_rate": 16000,
+  "frame_ms": 32,
+  "endpoint_ms": 400,
+  "final_grace_ms": 150,
+  "asr_catchup_ms": 400,
+  "bargein_confirm_ms": 200,
+  "budget_ms": {
+    "vad_endpoint": 400,
+    "asr_final": 150,
+    "llm_first_sentence": 400,
+    "tts_first_chunk": 200,
+    "transport_buffer": 50,
+    "total": 1200,
+    "telephony_total": 1600
+  },
+  "vad": {
+    "model_path": "models/silero_vad.onnx",
+    "threshold": 0.5,
+    "neg_threshold": 0.35,
+    "min_speech_ms": 96
+  },
+  "providers": {
+    "asr": "mock",
+    "llm": "mock",
+    "tts": "mock"
+  },
+  "mock": {
+    "asr": {"final_ms": 120},
+    "llm": {
+      "first_token_ms": 180,
+      "token_interval_ms": 25,
+      "reply": "好的，没问题。从前有一个程序员，他每天都在修 bug，早上修三个，下午修四个，晚上还要加班修两个。有一天他终于修完了所有的 bug，结果发现需求又变了，于是他只能重新开始，继续写代码。这个故事告诉我们，需求变更才是最大的 bug。"
+    },
+    "tts": {"first_chunk_ms": 120, "ms_per_char": 120, "max_ms_per_sentence": 4000}
+  }
+}
