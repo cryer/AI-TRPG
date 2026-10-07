@@ -23,7 +23,7 @@
   "providers": {
     "asr": "sherpa",
     "llm": "kimi",
-    "tts": "sherpa"
+    "tts": "cosyvoice"
   },
   "sherpa_asr": {
     "model_dir": "../realtime-voice-agent/models/sherpa-asr-bilingual-zh-en",
@@ -35,6 +35,35 @@
     "provider": "cpu",
     "num_threads": 4,
     "speed": 1.1
+  },
+  "cosyvoice": {
+    "repo_path": "vendor/CosyVoice",
+    "model_dir": "./models/CosyVoice2-0.5B",
+    "default_voice": "narrator_m",
+    "fp16": true,
+    "use_ort_estimator": true,
+    "voices": {
+      "narrator_m": {
+        "prompt_wav": "./models/voices/narrator_m.wav",
+        "instruct": "用低沉平稳、富有叙事感的语气讲述"
+      },
+      "npc_female": {
+        "prompt_wav": "./models/voices/npc_female.wav",
+        "instruct": "用冷静优雅的语气说话"
+      },
+      "npc_female_young": {
+        "prompt_wav": "./models/voices/npc_female_young.wav",
+        "instruct": "用清亮自然的语气说话"
+      },
+      "npc_male_old": {
+        "prompt_wav": "./models/voices/npc_male_old.wav",
+        "instruct": "用苍老缓慢的语气说话"
+      },
+      "npc_male_young": {
+        "prompt_wav": "./models/voices/npc_male_young.wav",
+        "instruct": "用沉稳的青年语气说话"
+      }
+    }
   },
   "kimi": {
     "model": "kimi-for-coding-highspeed",

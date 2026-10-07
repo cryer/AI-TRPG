@@ -9,3 +9,6 @@ __pycache__/
 # 运行产物
 reports/
 certs/
+
+# 模型文件（CosyVoice2 约 5.3GB + 声线参考音；参考音可用 scripts/gen_voice_refs.py 再生成）
+models/

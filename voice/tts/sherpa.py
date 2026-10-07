@@ -16,7 +16,7 @@ from typing import AsyncIterator
 
 import numpy as np
 
-from voice.tts.base import AudioChunk
+from voice.tts.base import AudioChunk, strip_tags
 
 CHUNK_MS = 100
 
@@ -88,6 +88,9 @@ class SherpaOnnxTTS:
         seq = 0
         chunk_bytes = self.sample_rate * 2 * CHUNK_MS // 1000
         async for sentence in sentences:
+            sentence = strip_tags(sentence)  # 多音色标记本 provider 不认，剥掉防念出
+            if not sentence.strip():
+                continue
             try:
                 pcm = await loop.run_in_executor(None, self._synth_sync, sentence)
             except Exception as e:

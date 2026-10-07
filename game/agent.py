@@ -12,6 +12,7 @@ content token 照常流式产出（送 TTS），tool_calls 在流尾收齐后由
 from __future__ import annotations
 
 import json
+import re
 from typing import AsyncIterator
 
 from game.engine import GameEngine, LOBBY, PLAYING, ENDED
@@ -56,6 +57,11 @@ _DM_BASE_RULES = (
     "调用 lookup_scene 查询，不要凭印象编造。"
     "打断处理：玩家可能随时打断你的叙述。被打断后不要重播整段，"
     "直接接住玩家的新意图继续（比如「好，你停在门口——你贴上门板仔细听……」）。"
+    "角色配音：系统会给不同角色配不同声线。NPC 开口说话时，在他的台词开头"
+    "紧挨着写 ⟦s:NPC名字 e:情绪⟧（名字严格用名册里的名字，标记后不换行直接跟台词），"
+    "你自己的叙述、旁白和玩家相关描述一律不加任何标记；台词说完回到旁白也不用标记。"
+    "情绪从以下词里选最贴合当前语境的一个：平静、紧张、恐惧、愤怒、悲伤、"
+    "神秘、激动、低语、恭敬、犹豫、温柔、威严。不要编造名册之外的 NPC。"
     "语音约束：你的所有回复都会被语音合成朗读出来。口语化叙述，单次回复"
     "不超过五六句话（开场白和结局可以稍长）；不要使用 Markdown、列表、表情符号。"
 )
@@ -129,6 +135,20 @@ def _args_to_str(args) -> str:
     return args or "{}"
 
 
+_TAG_V = re.compile(r"\bv:([\w一-鿿·'-]+)")
+_TAG_S = re.compile(r"\bs:([^⟧\s]+)")
+_TAG_E = re.compile(r"\be:([^⟧]+)")
+
+
+def _npc_aliases(full_name: str) -> set[str]:
+    """「周世海（老管家）」→ {全名, 周世海, 老管家}，覆盖 LLM 的各种写法。"""
+    aliases = {full_name}
+    m = re.match(r"^(.+?)（(.+?)）$", full_name)
+    if m:
+        aliases.update((m.group(1), m.group(2)))
+    return aliases
+
+
 class GameAgent:
     def __init__(self, cfg: dict, llm):
         game_cfg = cfg.get("game", {})
@@ -167,6 +187,69 @@ class GameAgent:
             return prompt
         return dm_prompt(self.engine, self.memory)
 
+    # ---------- 多音色标记改写（⟦s:NPC名 e:情绪⟧ → ⟦v:声线id e:情绪⟧） ----------
+
+    def _npc_voice(self, name: str) -> str | None:
+        adv = self.engine.adventure
+        if adv is None:
+            return None
+        for n in adv.get("npcs", []):
+            if name in _npc_aliases(n["name"]):
+                return n.get("voice")
+        # 模糊兜底：互为子串（『红鼻』杰克 vs 杰克）
+        for n in adv.get("npcs", []):
+            if len(name) >= 2 and name in n["name"]:
+                return n.get("voice")
+        return None
+
+    def _rewrite_tag(self, body: str) -> str:
+        em = _TAG_E.search(body)
+        emotion = f" e:{em.group(1).strip()}" if em else ""
+        vm = _TAG_V.search(body)
+        if vm:
+            return f"⟦v:{vm.group(1)}{emotion}⟧"
+        sm = _TAG_S.search(body)
+        if not sm:
+            return ""                      # 无法识别的标记：剥掉，防念出
+        voice = self._npc_voice(sm.group(1).strip())
+        return f"⟦v:{voice}{emotion}⟧" if voice else ""
+
+    async def _voice_rewrite(self, stream) -> AsyncIterator:
+        """流式过滤器：把 LLM 写的 ⟦s:...⟧ 标记改写成声线 id，未闭合标记丢弃。
+
+        非 str 事件（tool_calls 字典）原样透传；改写后的文本才进 history，
+        与玩家实际听到的一致。
+        """
+        buf = ""
+        in_tag = False
+        async for ev in stream:
+            if not isinstance(ev, str):
+                buf, in_tag = "", False
+                yield ev
+                continue
+            out = []
+            for ch in ev:
+                if in_tag:
+                    if ch == "⟧":
+                        out.append(self._rewrite_tag(buf))
+                        buf, in_tag = "", False
+                    else:
+                        buf += ch
+                elif ch == "⟦":
+                    if buf:
+                        out.append(buf)
+                        buf = ""
+                    in_tag = True
+                else:
+                    buf += ch
+            if buf and not in_tag:
+                out.append(buf)
+                buf = ""
+            if out:
+                yield "".join(out)
+        if buf and not in_tag:
+            yield buf
+
     async def respond(self, messages: list[dict],
                       gen_id: int) -> AsyncIterator[str]:
         stream_events = getattr(self.llm, "stream_events", None)
@@ -188,7 +271,8 @@ class GameAgent:
                 tools = DM_TOOLS
             content_parts: list[str] = []
             tool_calls = None
-            async for ev in stream_events(msgs, gen_id, tools=tools):
+            async for ev in self._voice_rewrite(
+                    stream_events(msgs, gen_id, tools=tools)):
                 if isinstance(ev, str):
                     content_parts.append(ev)
                     yield ev

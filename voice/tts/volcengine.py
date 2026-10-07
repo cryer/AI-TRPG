@@ -16,7 +16,7 @@ from typing import AsyncIterator
 
 import aiohttp
 
-from voice.tts.base import AudioChunk
+from voice.tts.base import AudioChunk, strip_tags
 
 URL = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
 DEFAULT_RESOURCE_ID = "seed-tts-2.0"
@@ -44,6 +44,9 @@ class VolcengineTTS:
         session = await self._get_session()
         seq = 0
         async for sentence in sentences:
+            sentence = strip_tags(sentence)  # 多音色标记本 provider 不认，剥掉防念出
+            if not sentence.strip():
+                continue
             body = {"req_params": {
                 "text": sentence,
                 "speaker": self.speaker,

@@ -16,4 +16,7 @@ def create_tts(cfg: dict) -> TTS:
     if name == "sherpa":
         from voice.tts.sherpa import SherpaOnnxTTS
         return SherpaOnnxTTS(**cfg.get("sherpa_tts", {}))
+    if name == "cosyvoice":
+        from voice.tts.cosyvoice import CosyVoiceTTS
+        return CosyVoiceTTS(**cfg.get("cosyvoice", {}))
     raise ValueError(f"unknown TTS provider: {name!r}")
