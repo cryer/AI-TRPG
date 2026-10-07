@@ -33,6 +33,17 @@
   避免女 NPC 静默掉成男旁白。
 - barge-in 取消：外层 cancel 后停止入队，合成线程在 hop 边界检查取消标志
   提前退出（一个 hop ~0.2-0.5s），GPU 锁快速释放给新回合；不会并发抢卡。
+- vendor 运行时加固（_patch_runtime_safety，monkey-patch 不改 vendor 源码）：
+  a) 采样加固：fp16 autocast 下 LM logits 会出 inf/nan，ras_sampling 的
+     multinomial 直接抛 RuntimeError（真人局实锤）——llm.sampling 是
+     cosyvoice2.yaml 注入的普通函数，实例上替换成清洗+贪心兜底的版本；
+  b) llm_job 兜底：vendor 的 llm_job 线程一旦异常死亡，llm_end_dict[uuid]
+     永远为 False，tts() 生成器 while True 死循环，worker 抱着 GPU 锁永久
+     阻塞——整个进程的 TTS 全灭且重连无效（provider 是全局单例）。包装后
+     finally 必置 end 标志，任何异常只静默当前句；
+  c) 取消传播：被打断的合成，其 llm_job 在后台继续跑完整句 token（vendor
+     无取消机制），与新回合 llm.inference 并发有状态损坏风险。注册
+     per-uuid 取消事件逐 token 检查（一 token 内退出），llm 级锁串行。
 """
 
 from __future__ import annotations
@@ -135,6 +146,7 @@ class CosyVoiceTTS:
             from cosyvoice.cli.cosyvoice import CosyVoice2
             self._model = CosyVoice2(self.model_dir, load_jit=self.load_jit,
                                      load_trt=False, fp16=self.fp16)
+            self._patch_runtime_safety()
             if self.use_ort_estimator:
                 self._patch_ort_estimator()
             if self.nfe != 10:
@@ -193,6 +205,117 @@ class CosyVoiceTTS:
             return orig(cfm, mu, mask, min(n_timesteps, nfe), **kw)
 
         cfm.forward = clamped_forward
+
+    def _patch_runtime_safety(self):
+        """vendor 运行时加固（monkey-patch，不改 vendor 源码，子模块保持干净）。
+
+        背景见模块 docstring。三件事：采样 nan 加固、llm_job 异常兜底
+        （防全局 TTS 死锁）、barge-in 取消传播 + llm 并发互斥。
+        """
+        import threading as _th
+        from collections.abc import Generator as _Gen
+        import torch
+        from cosyvoice.cli import model as cli_model
+
+        inner = self._model.model          # CosyVoice2Model
+
+        # (a) 采样加固：llm.sampling 是 cosyvoice2.yaml !name 注入的普通函数
+        # （ras_sampling），实例属性遮蔽即可，与 import 绑定方式无关
+        orig_sampling = inner.llm.sampling
+
+        def safe_sampling(weighted_scores, decoded_tokens, sampling, **kw):
+            if not torch.isfinite(weighted_scores).all():
+                weighted_scores = torch.nan_to_num(
+                    weighted_scores, nan=-float("inf"),
+                    posinf=1e4, neginf=-float("inf"))
+            try:
+                return orig_sampling(weighted_scores, decoded_tokens, sampling, **kw)
+            except RuntimeError:
+                # softmax/multinomial 仍数值异常：贪心兜底，绝不炸 llm_job 线程
+                print("[warn] cosyvoice 采样数值异常，本 token 回退贪心")
+                return int(weighted_scores.argmax().item())
+
+        inner.llm.sampling = safe_sampling
+
+        # (b)(c) llm_job 包装：end 标志兜底 + 逐 token 取消 + llm 级互斥
+        inner._trpg_cancel = {}                    # uuid -> threading.Event
+        inner._trpg_llm_lock = _th.Lock()
+        if getattr(cli_model.CosyVoiceModel, "_trpg_patched", False):
+            return
+        orig_llm_job = cli_model.CosyVoiceModel.llm_job
+
+        def safe_llm_job(self_m, text, prompt_text, llm_prompt_speech_token,
+                         llm_embedding, uuid):
+            if isinstance(text, _Gen):
+                # 流式文本输入路径本项目不用，走原实现（无取消/兜底）
+                orig_llm_job(self_m, text, prompt_text,
+                             llm_prompt_speech_token, llm_embedding, uuid)
+                return
+            ev = _th.Event()
+            self_m._trpg_cancel[uuid] = ev
+            try:
+                # 与被 barge-in 抛弃的旧生成串行：旧线程逐 token 检查取消
+                # 事件，一个 token（~20-50ms）内退出，新回合几乎不等
+                with self_m._trpg_llm_lock:
+                    fp16 = self_m.fp16 is True and hasattr(self_m.llm, 'vllm') is False
+                    with self_m.llm_context, torch.cuda.amp.autocast(fp16):
+                        token_generator = self_m.llm.inference(
+                            text=text.to(self_m.device),
+                            text_len=torch.tensor([text.shape[1]], dtype=torch.int32).to(self_m.device),
+                            prompt_text=prompt_text.to(self_m.device),
+                            prompt_text_len=torch.tensor([prompt_text.shape[1]], dtype=torch.int32).to(self_m.device),
+                            prompt_speech_token=llm_prompt_speech_token.to(self_m.device),
+                            prompt_speech_token_len=torch.tensor([llm_prompt_speech_token.shape[1]], dtype=torch.int32).to(self_m.device),
+                            embedding=llm_embedding.to(self_m.device),
+                            uuid=uuid)
+                        cur_silent, max_silent = 0, 5
+                        for i in token_generator:
+                            if ev.is_set():      # barge-in：立即停 token 生成
+                                token_generator.close()
+                                break
+                            if i in self_m.silent_tokens:
+                                cur_silent += 1
+                                if cur_silent > max_silent:
+                                    continue
+                            else:
+                                cur_silent = 0
+                            self_m.tts_speech_token_dict[uuid].append(i)
+            except Exception:
+                import traceback
+                print(f"[warn] cosyvoice llm_job 异常，本句静默（不再全局死锁）:"
+                      f"\n{traceback.format_exc()}")
+            finally:
+                # 关键兜底：tts() 生成器靠这个标志退出 while 循环；
+                # 缺了它 worker 抱 GPU 锁死循环，全进程 TTS 永久停摆
+                self_m.llm_end_dict[uuid] = True
+                self_m._trpg_cancel.pop(uuid, None)
+
+        cli_model.CosyVoiceModel.llm_job = safe_llm_job
+        cli_model.CosyVoiceModel._trpg_patched = True
+
+    @staticmethod
+    def _cancel_active_llm(inner) -> None:
+        """barge-in：让后台仍在生成 token 的 llm_job 线程尽快退出。"""
+        for ev in getattr(inner, "_trpg_cancel", {}).values():
+            ev.set()
+
+    @staticmethod
+    def _sweep_abandoned(inner) -> None:
+        """清理被 barge-in 抛弃的生成在模型 dict 里的残留（flow_cache 等 GPU 张量）。
+
+        正常结束的生成会由 tts() 生成器自己 pop；只有被打断抛弃的会留下。
+        本函数在我们的 GPU 锁内、新生成开始前调用，此时不存在活跃生成，
+        凡 llm_end 已置位且 llm 线程已退出的 uuid 都是残留。
+        """
+        registry = getattr(inner, "_trpg_cancel", {})
+        dicts = [d for name in ("tts_speech_token_dict", "llm_end_dict",
+                                "hift_cache_dict", "mel_overlap_dict",
+                                "flow_cache_dict")
+                 if (d := getattr(inner, name, None)) is not None]
+        for uid in list(inner.tts_speech_token_dict.keys()):
+            if inner.llm_end_dict.get(uid) and uid not in registry:
+                for d in dicts:
+                    d.pop(uid, None)
 
     # ---------- 前端特征缓存（声线 → 参考音特征；声线+语气 → 模型输入模板） ----------
 
@@ -286,6 +409,7 @@ class CosyVoiceTTS:
         if not norm:
             return
         with self._lock:
+            self._sweep_abandoned(model.model)   # 清上次 barge-in 的残留
             tpl = self._get_template(voice_id, emotion)
             text_token, text_token_len = frontend._extract_text_token(norm)
             model_input = {**tpl, "text": text_token, "text_len": text_token_len}
@@ -296,10 +420,15 @@ class CosyVoiceTTS:
                 # 每句开始前重置，否则后续短句首音要等 100 token
                 model.model.token_hop_len = 25
             rs_state = None               # ratecv 状态跨 chunk 保持，避免边界咔哒声
-            for out in model.model.tts(**model_input, stream=stream,
-                                       speed=self.speed):
+            gen = model.model.tts(**model_input, stream=stream,
+                                  speed=self.speed)
+            for out in gen:
                 if should_stop is not None and should_stop():
-                    break                 # barge-in：hop 边界退出，释放锁
+                    # barge-in：停掉后台 llm token 生成（防与新回合并发），
+                    # 关掉生成器，hop 边界退出释放锁
+                    self._cancel_active_llm(model.model)
+                    gen.close()
+                    break
                 speech = out["tts_speech"].detach().cpu().numpy().flatten()
                 speech = np.clip(speech, -1.0, 1.0)
                 pcm = (speech * 32767.0).astype(np.int16).tobytes()
