@@ -1,0 +1,80 @@
+{
+  "sample_rate": 16000,
+  "frame_ms": 32,
+  "endpoint_ms": 400,
+  "final_grace_ms": 150,
+  "asr_catchup_ms": 400,
+  "bargein_confirm_ms": 200,
+  "budget_ms": {
+    "vad_endpoint": 400,
+    "asr_final": 150,
+    "llm_first_sentence": 400,
+    "tts_first_chunk": 200,
+    "transport_buffer": 50,
+    "total": 1200,
+    "telephony_total": 1600
+  },
+  "vad": {
+    "model_path": "models/silero_vad.onnx",
+    "threshold": 0.5,
+    "neg_threshold": 0.35,
+    "min_speech_ms": 96
+  },
+  "providers": {
+    "asr": "volcengine",
+    "llm": "kimi",
+    "tts": "volcengine"
+  },
+  "volcengine_asr": {
+    "resource_id": "volc.seedasr.sauc.duration"
+  },
+  "volcengine": {
+    "_readme": "云端 TTS（豆包语音合成大模型）。voices 把剧本 npcs[].voice 的声线 id 映射到火山官方音色，emotions 把 DM 标记里的中文情绪词映射到火山 emotion code；音色/情绪库与配置指南见 docs/cloud-tts.md",
+    "speaker": "zh_male_xuanyijieshuo_uranus_bigtts",
+    "resource_id": "seed-tts-2.0",
+    "emotion_scale": 4,
+    "voices": {
+      "narrator_m": {
+        "speaker": "zh_male_xuanyijieshuo_uranus_bigtts"
+      },
+      "npc_female": {
+        "speaker": "zh_female_gaolengyujie_uranus_bigtts"
+      },
+      "npc_female_young": {
+        "speaker": "zh_female_linjianvhai_uranus_bigtts"
+      },
+      "npc_male_old": {
+        "speaker": "zh_male_yuanboxiaoshu_uranus_bigtts"
+      },
+      "npc_male_young": {
+        "speaker": "zh_male_yangguangqingnian_uranus_bigtts"
+      }
+    },
+    "emotions": {
+      "平静": "neutral",
+      "紧张": "tension",
+      "恐惧": "fear",
+      "愤怒": "angry",
+      "悲伤": "sad",
+      "神秘": "storytelling",
+      "激动": "excited",
+      "低语": "ASMR",
+      "恭敬": "tender",
+      "犹豫": "shy",
+      "温柔": "tender",
+      "威严": "coldness"
+    }
+  },
+  "kimi": {
+    "model": "kimi-for-coding-highspeed",
+    "reasoning_effort": "low",
+    "max_tokens": 800
+  },
+  "game": {
+    "adventures_dir": "adventures",
+    "window_turns": 18,
+    "summary_interval_turns": 15,
+    "bargein_narration_ms": 500,
+    "bargein_listen_ms": 200
+  }
+}
