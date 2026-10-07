@@ -56,7 +56,6 @@ async def main():
 
     print("== 3. _segment_stream：跨句声线 + 合并 ==")
     tts = CosyVoiceTTS()
-
     async def segments_of(sentences: list[str], trickle: bool = False):
         async def gen():
             for s in sentences:
@@ -99,6 +98,33 @@ async def main():
     ])
     check("声线切换分成两段", [v for _, v, _ in segs4] == ["npc_a", "npc_b"],
           detail=str(segs4))
+
+    # 用户 turn 8 实锤场景：长台词跨 5 句，全部保持 NPC 声线
+    segs5 = await segments_of([
+        "唇角微微一弯。",
+        "⟦v:female_young e:温柔⟧「您就是晚晴请来的侦探吧？",
+        "真是一表人才。",
+        "我叫沈曼丽，",
+        "这两日庄里乱糟糟的，",
+        "让您见笑了。」",
+    ])
+    npc_segs = [t for t, v, e in segs5 if v == "female_young"]
+    check("长台词全程 NPC 声线", bool(npc_segs) and
+          all(k in "".join(npc_segs) for k in ("一表人才", "沈曼丽", "见笑了")),
+          detail=str(segs5))
+    check("开头旁白是默认声线", segs5[0][1] == "", detail=str(segs5))
+
+    print("== 4. _resolve_voice：声线 id 容错 ==")
+    tts2 = CosyVoiceTTS(voices={v: {"prompt_wav": "x", "instruct": ""} for v in
+                                ("narrator_m", "npc_female", "npc_female_young",
+                                 "npc_male_old", "npc_male_young")},
+                        default_voice="narrator_m")
+    check("LLM 自创 id 补前缀", tts2._resolve_voice("female_young") == "npc_female_young")
+    check("精确 id 原样", tts2._resolve_voice("npc_male_old") == "npc_male_old")
+    check("唯一子串匹配", tts2._resolve_voice("male_old") == "npc_male_old")
+    check("空 id 回默认", tts2._resolve_voice("") == "narrator_m")
+    check("前缀规则优先于歧义", tts2._resolve_voice("female") == "npc_female")
+    check("完全未知回默认", tts2._resolve_voice("robot") == "narrator_m")
 
     print("== 结果 ==")
     print("ALL OK" if FAIL == 0 else f"{FAIL} 项失败")

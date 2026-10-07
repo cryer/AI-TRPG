@@ -23,8 +23,13 @@
 - 多音色零样本克隆：`voices` 配置声线注册表 {id: {prompt_wav, instruct}}，
   句子可带内联标记 `⟦v:voice_id e:情绪⟧` 切换声线/语气（base.parse_tagged_stateful
   解析）；标记非法或未注册 id 一律回退 default_voice，不会念出标记。
-- (voice_id, instruct) 维度缓存前端特征（speech token/embedding/feat 提取
-  只需一次），同声线换句零额外开销；情绪词动态拼 instruct 也走缓存。
+- (voice, instruct) 模板拆两级缓存：参考音特征（speech token/embedding/feat，
+  只依赖 prompt_wav）每声线提取一次；instruct 文本 token 是 ms 级 tokenizer
+  调用。warmup 预建全部 声线×情绪 模板，对局中换情绪不再在 GPU 锁里做
+  特征提取（每次 ~1s，是情绪多变时播放卡顿的主因）。
+- 声线 id 容错解析（_resolve_voice）：LLM 会模仿 history 里的标记自创 id
+  （如 female_young 漏 npc_ 前缀），精确 → 补/去前缀 → 唯一子串 → 默认，
+  避免女 NPC 静默掉成男旁白。
 - barge-in 取消：外层 cancel 后停止入队，合成线程在 hop 边界检查取消标志
   提前退出（一个 hop ~0.2-0.5s），GPU 锁快速释放给新回合；不会并发抢卡。
 """
@@ -36,6 +41,7 @@ import audioop
 import os
 import sys
 import threading
+import time
 from typing import AsyncIterator, Callable
 
 import numpy as np
@@ -44,8 +50,13 @@ from voice.tts.base import AudioChunk, parse_tagged_stateful
 
 CHUNK_MS = 100
 NATIVE_SR = 24000  # CosyVoice2 输出采样率
-MERGE_MAX_CHARS = 100   # 句间合并的批次字符上限
+MERGE_MAX_CHARS = 150   # 句间合并的批次字符上限
 MERGE_WAIT_S = 0.05     # 合并时等非阻塞拉取下一句的宽限
+
+# DM 规则（game/agent.py）约定的情绪词表。warmup 预建全部 声线×情绪 模板，
+# 对局中换情绪只做廉价组装；词表与 DM prompt 保持一致。
+DEFAULT_EMOTIONS = ["平静", "紧张", "恐惧", "愤怒", "悲伤", "神秘",
+                    "激动", "低语", "恭敬", "犹豫", "温柔", "威严"]
 
 
 class CosyVoiceTTS:
@@ -57,6 +68,7 @@ class CosyVoiceTTS:
                  use_ort_estimator: bool = True, nfe: int = 10,
                  load_jit: bool = False,
                  cudnn_benchmark: bool = False,
+                 emotions: list | None = None,
                  sample_rate: int = 16000):
         self.repo_path = repo_path
         self.model_dir = model_dir
@@ -75,10 +87,13 @@ class CosyVoiceTTS:
         # benchmark 模式会按新形状重新调优：真实对局每句长度都不同，
         # 实测 RTX 3050 上关闭更快（RTF 1.05→0.95），长句尤为明显
         self.cudnn_benchmark = cudnn_benchmark
+        # warmup 预建模板的情绪词表（见 DEFAULT_EMOTIONS）
+        self.emotions = emotions or DEFAULT_EMOTIONS
         self.sample_rate = sample_rate
         self._model = None
         self._lock = threading.Lock()       # GPU 串行
-        self._frontend_cache: dict = {}      # (voice_id, instruct) -> model_input 模板
+        self._prompt_cache: dict = {}       # voice_id -> 参考音特征（每声线一次）
+        self._template_cache: dict = {}     # (voice_id, instruct) -> 完整模板
         self._load_err: Exception | None = None
 
     # ---------- 模型加载 ----------
@@ -159,16 +174,64 @@ class CosyVoiceTTS:
 
         cfm.forward = clamped_forward
 
-    # ---------- 前端特征缓存（声线+语气 → 模型输入模板） ----------
+    # ---------- 前端特征缓存（声线 → 参考音特征；声线+语气 → 模型输入模板） ----------
+
+    def _resolve_voice(self, voice_id: str) -> str:
+        """容错解析标记/剧本给的声线 id，返回注册表内的真实 id。
+
+        LLM 会模仿 history 里的标记自创 id（如 female_young 漏 npc_ 前缀），
+        静默回退默认声线会让女 NPC 变男声。精确 → 补/去 npc_ 前缀 →
+        唯一子串匹配 → 默认声线（告警）。
+        """
+        if not voice_id:
+            return self.default_voice
+        if voice_id in self.voices:
+            return voice_id
+        for cand in (f"npc_{voice_id}", voice_id.removeprefix("npc_")):
+            if cand in self.voices:
+                return cand
+        matches = [v for v in self.voices if voice_id in v or v in voice_id]
+        if len(matches) == 1:
+            return matches[0]
+        print(f"[warn] 声线 {voice_id!r} 未注册，回退默认 {self.default_voice!r}")
+        return self.default_voice
 
     def _voice_profile(self, voice_id: str) -> dict:
-        prof = self.voices.get(voice_id) or self.voices.get(self.default_voice)
+        prof = self.voices.get(voice_id)
         if prof is None:
-            raise RuntimeError(f"cosyvoice 未配置声线 {self.default_voice!r}")
+            raise RuntimeError(f"cosyvoice 未配置声线 {voice_id!r}")
         return prof
 
+    def _voice_prompt_feats(self, voice_id: str) -> dict:
+        """参考音特征（只依赖 prompt_wav，与情绪/instruct 无关），每声线提取一次。
+
+        复刻 frontend_zero_shot 的 prompt 部分（含 cosyvoice2 的 feat 帧数
+        = 2×token 对齐）；特征提取是 GPU/ONNX 调用（~0.3-1s），绝不能在
+        对局中现场做（卡在合成锁里就是一次播放停顿）。
+        """
+        feats = self._prompt_cache.get(voice_id)
+        if feats is None:
+            frontend = self._model.frontend
+            wav = self._voice_profile(voice_id)["prompt_wav"]
+            speech_feat, speech_feat_len = frontend._extract_speech_feat(wav)
+            speech_token, speech_token_len = frontend._extract_speech_token(wav)
+            token_len = min(int(speech_feat.shape[1] / 2), speech_token.shape[1])
+            speech_feat, speech_feat_len[:] = \
+                speech_feat[:, :2 * token_len], 2 * token_len
+            speech_token, speech_token_len[:] = \
+                speech_token[:, :token_len], token_len
+            embedding = frontend._extract_spk_embedding(wav)
+            feats = {"flow_prompt_speech_token": speech_token,
+                     "flow_prompt_speech_token_len": speech_token_len,
+                     "prompt_speech_feat": speech_feat,
+                     "prompt_speech_feat_len": speech_feat_len,
+                     "llm_embedding": embedding, "flow_embedding": embedding}
+            self._prompt_cache[voice_id] = feats
+        return feats
+
     def _get_template(self, voice_id: str, emotion: str | None):
-        prof = self._voice_profile(voice_id)
+        vid = self._resolve_voice(voice_id)
+        prof = self._voice_profile(vid)
         instruct = (f"请用{emotion}的语气说话。" if emotion
                     else prof.get("instruct", ""))
         # CosyVoice2 instruct2 约定：instruct 必须以 <|endofprompt|> 结尾，
@@ -176,13 +239,14 @@ class CosyVoiceTTS:
         # 拼在 text 前，靠该 special token 区分指令与正文）
         if "<|endofprompt|>" not in instruct:
             instruct = instruct + "<|endofprompt|>"
-        key = (voice_id if voice_id in self.voices else self.default_voice, instruct)
-        tpl = self._frontend_cache.get(key)
+        key = (vid, instruct)
+        tpl = self._template_cache.get(key)
         if tpl is None:
-            frontend = self._model.frontend
-            tpl = frontend.frontend_instruct2(
-                "", instruct, prof["prompt_wav"], NATIVE_SR, "")
-            self._frontend_cache[key] = tpl
+            # 模板 = 参考音特征（缓存） + instruct 文本 token（tokenizer，ms 级）
+            tok, tok_len = self._model.frontend._extract_text_token(instruct)
+            tpl = {**self._voice_prompt_feats(vid),
+                   "prompt_text": tok, "prompt_text_len": tok_len}
+            self._template_cache[key] = tpl
         return tpl
 
     # ---------- 同步合成（worker 线程内） ----------
@@ -340,7 +404,11 @@ class CosyVoiceTTS:
                 raise
 
     async def warmup(self, text: str) -> bytes | None:
-        """开机预热：加载模型 + 构建全部声线模板 + 合成一句（结果丢弃）。"""
+        """开机预热：加载模型 + 预建全部 声线×情绪 模板 + 合成一句（丢弃）。
+
+        模板全量预建后，对局中换声线/情绪都是缓存命中，不会在 GPU 锁里
+        现场提取参考音特征（~1s/次，是情绪多变时播放卡顿的主因）。
+        """
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._load_sync)
         if self._load_err is not None:
@@ -349,8 +417,13 @@ class CosyVoiceTTS:
 
         def _warm():
             try:
+                t0 = time.monotonic()
                 for voice_id in self.voices:
                     self._get_template(voice_id, None)
+                    for em in self.emotions:
+                        self._get_template(voice_id, em)
+                print(f"[cosyvoice] 声线模板预建完成：{len(self.voices)} 声线 × "
+                      f"{len(self.emotions) + 1} 语气，{time.monotonic() - t0:.1f}s")
                 self._synth_segment_sync(text, self.default_voice, None,
                                          lambda pcm: None)
             except Exception as e:
