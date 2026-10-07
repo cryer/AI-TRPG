@@ -3,12 +3,15 @@
 与 sherpa provider 同契约（voice/tts/base.py），可经 configs 直接互换。
 
 - 官方仓库代码经 sys.path 注入加载（`repo_path` 配置），模型懒加载。
-- 逐句整句合成（stream=False，与 sherpa 相同的句级粒度），worker 线程 →
+- 逐句合成，LLM 流式出 token + flow/hift 逐 hop 出音频（stream=True）：
+  首音延迟 ≈ 首个 hop（25 token），而不是整句合成完。worker 线程 →
   asyncio 队列桥接，event loop 零阻塞；单 GPU 串行由 threading.Lock 保证。
 - flow matching 解码器走 onnxruntime CUDA（`use_ort_estimator`，默认开）：
   模型自带的 flow.decoder.estimator.fp32.onnx 在 WDDM/Windows 下比 torch eager
-  快约 10 倍（实测 67M UNet 单次 500ms→49ms），是 6GB 级显卡实时的关键；
-  该 ONNX 不含流式 cache 输入，所以必须句级非流式。4090/Linux 上可关闭。
+  快约 10 倍（实测 67M UNet 单次 500ms→49ms），是 6GB 级显卡实时的关键。
+  CFM 的 cache/因果掩码在 estimator 之外处理（solve_euler 固定 z/mu 前缀，
+  流式 hop 内用全量注意力），因此该 ONNX 同样可用于 stream=True 的逐 hop
+  合成——首音只需等第一个 25 token 的 hop，而非整句。
 - fp16 默认开：ORT estimator 不经过 torch autocast，fp16 只作用于 LLM/hift；
   开启时 LLM 权重同步转半精度（实测 55ms→19ms/token，显存占用也减半）。
   早期「autocast 拖慢 estimator」的结论只适用于 torch eager 解码路径。
@@ -132,8 +135,13 @@ class CosyVoiceTTS:
 
     def _get_template(self, voice_id: str, emotion: str | None):
         prof = self._voice_profile(voice_id)
-        instruct = (f"用{emotion}的语气说话" if emotion
+        instruct = (f"请用{emotion}的语气说话。" if emotion
                     else prof.get("instruct", ""))
+        # CosyVoice2 instruct2 约定：instruct 必须以 <|endofprompt|> 结尾，
+        # 否则 LM 会把 instruct 当正文念出来（llm.inference 把 prompt_text
+        # 拼在 text 前，靠该 special token 区分指令与正文）
+        if "<|endofprompt|>" not in instruct:
+            instruct = instruct + "<|endofprompt|>"
         key = (voice_id if voice_id in self.voices else self.default_voice, instruct)
         tpl = self._frontend_cache.get(key)
         if tpl is None:
@@ -160,8 +168,14 @@ class CosyVoiceTTS:
             tpl = self._get_template(voice_id, emotion)
             text_token, text_token_len = frontend._extract_text_token(norm)
             model_input = {**tpl, "text": text_token, "text_len": text_token_len}
+            # speed!=1.0 只在非流式 finalize 路径支持
+            stream = self.speed == 1.0
+            if stream:
+                # token_hop_len 在流式过程中会 ×2 递增且不复位（官方行为），
+                # 每句开始前重置，否则后续短句首音要等 100 token
+                model.model.token_hop_len = 25
             rs_state = None               # ratecv 状态跨 chunk 保持，避免边界咔哒声
-            for out in model.model.tts(**model_input, stream=False,
+            for out in model.model.tts(**model_input, stream=stream,
                                        speed=self.speed):
                 speech = out["tts_speech"].detach().cpu().numpy().flatten()
                 speech = np.clip(speech, -1.0, 1.0)
