@@ -31,7 +31,7 @@ SENTENCES = [
 
 async def main(bench: bool):
     tts = CosyVoiceTTS(
-        repo_path=r"vendor/CosyVoice",
+        repo_path="vendor/CosyVoice",
         model_dir=str(ROOT / "models" / "CosyVoice2-0.5B"),
         voices={"narrator_m": {"prompt_wav": str(ROOT / "models" / "voices" / "narrator_m.wav"),
                                "instruct": "用低沉平稳、富有叙事感的语气讲述"}},

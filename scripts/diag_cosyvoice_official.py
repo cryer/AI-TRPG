@@ -11,8 +11,8 @@ import wave
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, r"vendor/CosyVoice")
-sys.path.insert(0, r"vendor/CosyVoice\third_party\Matcha-TTS")
+sys.path.insert(0, "vendor/CosyVoice")
+sys.path.insert(0, "vendor/CosyVoice/third_party/Matcha-TTS")
 
 TEXT = "雪是从傍晚开始下的，整条进山的路只剩下你身后这一串脚印。"
 INSTRUCT = "用低沉平稳、富有叙事感的语气讲述<|endofprompt|>"
@@ -28,7 +28,7 @@ def main():
                     load_jit=False, load_trt=False, fp16=False)
 
     cases = [
-        ("official_prompt", r"vendor/CosyVoice\asset\zero_shot_prompt.wav"),
+        ("official_prompt", "vendor/CosyVoice/asset/zero_shot_prompt.wav"),
         ("our_prompt", str(ROOT / "models" / "voices" / "narrator_m.wav")),
     ]
     for name, wav_path in cases:
@@ -48,7 +48,7 @@ def main():
 
     import sherpa_onnx
     import soundfile as sf
-    d = r"../realtime-voice-agent\models\sherpa-asr-bilingual-zh-en"
+    d = "models/sherpa-asr-bilingual-zh-en"
     rec = sherpa_onnx.OnlineRecognizer.from_transducer(
         tokens=f"{d}/tokens.txt",
         encoder=f"{d}/encoder-epoch-99-avg-1.int8.onnx",

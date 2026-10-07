@@ -2,11 +2,13 @@
     auto_https disable_redirects
 }
 
-# sslip.io 泛域名：任意 *.116-169-215-214.sslip.io 都解析到 203.0.113.10。
-# 与 voice-agent 同款方案（Caddy + ACME TLS-ALPN 签发，需 443 对公网可达）。
-# 注意：443 全机只能有一个监听者；若 voice-agent 的 caddy 也在跑，
-# 请把两个域名合并到同一个 caddy 实例，不要同时起两个。
-trpg.116-169-215-214.sslip.io {
+# sslip.io 泛域名用法：把服务器公网 IP 的点换成连字符，任意 *.<IP-连字符>.sslip.io
+# 都解析到该 IP。例如 IP 为 203.0.113.10 时，域名是 203-0-113-10.sslip.io。
+# Caddy + ACME TLS-ALPN 签发证书，需 443 对公网可达。
+# 注意：443 全机只能有一个监听者；若同机还有其他 caddy 实例在跑，
+# 请把多个域名合并到同一个 caddy 实例，不要同时起两个。
+# 部署时把下面的 <YOUR-SERVER-IP-DASHED> 替换为实际 IP 的连字符形式。
+trpg.<YOUR-SERVER-IP-DASHED>.sslip.io {
     tls {
         issuer acme {
             disable_http_challenge

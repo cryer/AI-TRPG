@@ -15,7 +15,7 @@
     "telephony_total": 1600
   },
   "vad": {
-    "model_path": "../realtime-voice-agent/models/silero_vad.onnx",
+    "model_path": "models/silero_vad.onnx",
     "threshold": 0.5,
     "neg_threshold": 0.35,
     "min_speech_ms": 96
@@ -26,12 +26,12 @@
     "tts": "mock"
   },
   "sherpa_asr": {
-    "model_dir": "../realtime-voice-agent/models/sherpa-asr-bilingual-zh-en",
+    "model_dir": "models/sherpa-asr-bilingual-zh-en",
     "provider": "cpu",
     "num_threads": 4
   },
   "sherpa_tts": {
-    "model_dir": "../realtime-voice-agent/models/vits-zh-hf-fanchen-C",
+    "model_dir": "models/vits-zh-hf-fanchen-C",
     "provider": "cpu",
     "num_threads": 4,
     "speed": 1.1

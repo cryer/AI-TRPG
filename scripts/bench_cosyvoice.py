@@ -25,14 +25,14 @@ SENTENCES = [
 
 async def main():
     tts = CosyVoiceTTS(
-        repo_path=r"vendor/CosyVoice",
-        model_dir=r".\models\CosyVoice2-0.5B",
+        repo_path="vendor/CosyVoice",
+        model_dir="models/CosyVoice2-0.5B",
         voices={
-            "narrator_m": {"prompt_wav": r".\models\voices\narrator_m.wav",
+            "narrator_m": {"prompt_wav": "models/voices/narrator_m.wav",
                            "instruct": "用低沉平稳、富有叙事感的语气讲述"},
-            "npc_male_old": {"prompt_wav": r".\models\voices\npc_male_old.wav",
+            "npc_male_old": {"prompt_wav": "models/voices/npc_male_old.wav",
                              "instruct": "用恭敬而闪躲的语气说话"},
-            "npc_female": {"prompt_wav": r".\models\voices\npc_female.wav",
+            "npc_female": {"prompt_wav": "models/voices/npc_female.wav",
                            "instruct": "用冷静优雅的语气说话"},
         },
         default_voice="narrator_m",

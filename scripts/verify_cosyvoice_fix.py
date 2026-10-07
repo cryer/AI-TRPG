@@ -57,7 +57,7 @@ def transcribe(paths):
     import sherpa_onnx
     import soundfile as sf
 
-    d = r"../realtime-voice-agent\models\sherpa-asr-bilingual-zh-en"
+    d = "models/sherpa-asr-bilingual-zh-en"
     rec = sherpa_onnx.OnlineRecognizer.from_transducer(
         tokens=f"{d}/tokens.txt",
         encoder=f"{d}/encoder-epoch-99-avg-1.int8.onnx",
@@ -79,7 +79,7 @@ def transcribe(paths):
 
 async def main():
     tts = CosyVoiceTTS(
-        repo_path=r"vendor/CosyVoice",
+        repo_path="vendor/CosyVoice",
         model_dir=str(ROOT / "models" / "CosyVoice2-0.5B"),
         voices={
             "narrator_m": {"prompt_wav": str(ROOT / "models" / "voices" / "narrator_m.wav"),

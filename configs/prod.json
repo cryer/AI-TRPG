@@ -37,7 +37,7 @@
     "speed": 1.1
   },
   "cosyvoice": {
-    "_readme": "product 服务器（8×4090）配置：6 号卡 + nfe=10 最好音质；调优见 docs/local-tts.md",
+    "_readme": "服务器示例（8×4090，指定 6 号卡 + nfe=10 最好音质）；调优见 docs/local-tts.md",
     "repo_path": "vendor/CosyVoice",
     "model_dir": "models/CosyVoice2-0.5B",
     "default_voice": "narrator_m",

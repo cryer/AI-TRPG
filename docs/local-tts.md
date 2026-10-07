@@ -63,7 +63,7 @@ NPC 用哪个声线由**剧本文件**决定：`adventures/*.json` 里每个 NPC
 
 ```json
 "npc_female_child": {
-  "prompt_wav": "./models/voices/npc_female_child.wav",
+  "prompt_wav": "models/voices/npc_female_child.wav",
   "instruct": "用稚嫩活泼的语气说话"
 }
 ```
