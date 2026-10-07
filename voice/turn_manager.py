@@ -71,6 +71,13 @@ class TurnManager:
         self.final_grace_ms = cfg.get("final_grace_ms", 150)
         self.asr_catchup_ms = cfg.get("asr_catchup_ms", 400)
         self.bargein_confirm_ms = cfg.get("bargein_confirm_ms", 200)
+        # 非对称打断（TRPG §5）：DM 播长段叙述（开场白/场景描述/结局）时用更高的
+        # 确认阈值，咳嗽/翻纸声不会误切断；说完等待玩家行动时恢复灵敏响应。
+        # 无 game 配置段时两值相等，行为与底座完全一致。
+        game_cfg = cfg.get("game") or {}
+        self.bargein_narration_ms = game_cfg.get(
+            "bargein_narration_ms", self.bargein_confirm_ms)
+        self._narration = False
         self.providers = cfg.get("providers")
         adaptive = cfg.get("adaptive_endpoint", {})
         self.adaptive_enabled = adaptive.get("enabled", False)
@@ -131,7 +138,9 @@ class TurnManager:
                 self._candidate_run_ms += FRAME_MS
             elif prob < self.vad.neg_threshold:
                 self._candidate_run_ms = 0
-            if self._candidate_run_ms >= self.bargein_confirm_ms:
+            confirm_ms = (self.bargein_narration_ms if self._narration
+                          else self.bargein_confirm_ms)
+            if self._candidate_run_ms >= confirm_ms:
                 await self._do_barge_in()
         if ev is not None:
             await self._on_event(ev)
@@ -233,10 +242,19 @@ class TurnManager:
             print(f"[state] {self.state} → {new}")
             self.state = new
 
+    def set_narration(self, on: bool) -> None:
+        """DM 长段叙述（开场白/场景描述/结局）期间置位，用更高的打断确认阈值。"""
+        if on != self._narration:
+            self._narration = on
+            print(f"[barge-in] 打断确认阈值 → "
+                  f"{self.bargein_narration_ms if on else self.bargein_confirm_ms}ms"
+                  f"（{'叙述段' if on else '等待段'}）")
+
     # ---------- barge-in / 中止 ----------
 
     async def _do_barge_in(self) -> None:
         self._candidate = False
+        self._narration = False
         now = time.monotonic()
         interrupted_gen = self._gen
         self._gen += 1  # 铁律：作废旧 gen，迟到 token/chunk 全部丢弃
@@ -259,6 +277,7 @@ class TurnManager:
 
     def _abort_pipeline(self) -> None:
         self._gen += 1
+        self._narration = False
         self._pipeline_interrupted = False
         if self._pipeline_task is not None and not self._pipeline_task.done():
             self._pipeline_task.cancel()
@@ -403,6 +422,7 @@ class TurnManager:
             wf = render_turn_waterfall(ts)
             if wf:
                 print(f"  waterfall: {wf}")
+            self._narration = False   # 本段叙述播完，恢复灵敏打断
             if self._gen == gen_id and self.state in (PROCESSING, AGENT_SPEAKING):
                 if self._candidate:
                     # 播放收尾期间起的候选直接转正为新回合
@@ -433,6 +453,7 @@ class TurnManager:
             raise
         except Exception as e:
             print(f"[warn] turn {turn_id} 管线出错：{e!r}")
+            self._narration = False
             if self._gen == gen_id and self.state in (PROCESSING, AGENT_SPEAKING):
                 self._set_state(IDLE)
 

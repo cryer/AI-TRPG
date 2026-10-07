@@ -163,8 +163,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                      system_prompt=(agent.system_prompt if agent is not None
                                     else cfg.get("system_prompt", SYSTEM_PROMPT)))
     if agent is not None:
-        agent.history = tm.history   # 共享同一列表对象
-        tm.responder = agent.respond
+        agent.bind_turn_manager(tm)   # 共享 history、记忆、打断模式回调
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     jsonl_path = Path(app["out"]) / f"web_{stamp}.jsonl"
     try:

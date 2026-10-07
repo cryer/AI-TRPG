@@ -14,9 +14,10 @@ from __future__ import annotations
 import json
 from typing import AsyncIterator
 
-from game.engine import GameEngine, LOBBY
+from game.engine import GameEngine, LOBBY, PLAYING, ENDED
+from game.memory import ConversationMemory
 from game.script_loader import load_adventures
-from game.tools import DM_TOOLS, LOBBY_TOOLS, execute_tool
+from game.tools import DM_TOOLS, LOBBY_TOOLS, SESSION_TOOLS, execute_tool
 
 MAX_TOOL_ROUNDS = 5  # 防死循环
 
@@ -60,11 +61,12 @@ _DM_BASE_RULES = (
 )
 
 
-def dm_prompt(engine: GameEngine) -> str:
+def dm_prompt(engine: GameEngine, memory: ConversationMemory | None = None) -> str:
     """DM system prompt 动态拼装（每轮重建）。
 
-    M1 简化版：基础规则 + 剧本素材 + 世界状态 + 当前场景。
-    M2 扩展点：滚动摘要段、lookup_scene 检索结果注入、滑窗之外的长期记忆。
+    结构（AGENTS.md §4.3）：基础规则 + 剧本片段 + 世界状态（结构化事实，
+    永不淘汰）+ 滚动摘要（滑窗外的早期剧情）+ 当前场景 + NPC 名册。
+    最近 N 轮原文由 respond 里的滑窗注入，不进 system prompt。
     """
     adv = engine.adventure
     scene = engine.current_scene()
@@ -106,6 +108,14 @@ def dm_prompt(engine: GameEngine) -> str:
             + "；".join(n.get("secrets", []))
             for n in adv["npcs"])
         parts.append("【NPC 名册】（扮演时恪守各自性格与秘密）\n" + npc_lines)
+    if memory is not None and memory.summary:
+        parts.append("【剧情回顾摘要】（早期剧情的压缩记录；细节可用 lookup_scene 补查）\n"
+                     + memory.summary)
+    if engine.state == ENDED:
+        parts.append(
+            "【本局已结束】结局已定，不要再推进新的剧情或判定。向玩家做完结局"
+            "叙述后，简短复盘点评他本局的表现（做得好的地方、错过的关键线索），"
+            "复盘完成后调用 back_to_lobby 工具结束整场冒险。")
     parts.append(
         "【对话历史说明】\n开场白之前的对话历史是玩家选剧本的过程（那时你是"
         "推荐员），从现在起你已经是主持人，不要再以推荐员自居。")
@@ -126,14 +136,36 @@ class GameAgent:
             game_cfg.get("adventures_dir", "adventures"))
         self.engine = GameEngine(self.adventures)
         self.llm = llm
-        # 会被外部替换为 TurnManager.history（同一列表对象，见接线处）
+        # 会被 bind_turn_manager 替换为 TurnManager.history（同一列表对象）
         self.history: list = []
+        self.memory = ConversationMemory(
+            self.history,
+            window_turns=game_cfg.get("window_turns", 18),
+            summary_interval_turns=game_cfg.get("summary_interval_turns", 15))
+        self._narration_hook = lambda on: None   # bind 后接 TurnManager
+        self.engine.on_session_reset = self._on_session_reset
+
+    def bind_turn_manager(self, tm) -> None:
+        """接线（AGENTS.md §2.2）：共享 history、打断模式回调、局间清理。"""
+        self.history = tm.history
+        self.memory.history = tm.history
+        self._narration_hook = tm.set_narration
+        tm.responder = self.respond
+
+    def _on_session_reset(self) -> None:
+        """一局结束回 lobby：清空 history 只留 session_note，避免跨局污染。"""
+        self.memory.reset()
+        self.history.clear()
 
     def system_prompt(self) -> str:
         """按引擎状态返回当前 system prompt（作为 callable 传给 TurnManager）。"""
         if self.engine.state == LOBBY:
-            return LOBBY_PROMPT
-        return dm_prompt(self.engine)
+            prompt = LOBBY_PROMPT
+            if self.engine.session_note:
+                prompt += ("\n【上一局回顾】" + self.engine.session_note +
+                           "可以自然地提一句（比如他上局的表现），但不要展开细节。")
+            return prompt
+        return dm_prompt(self.engine, self.memory)
 
     async def respond(self, messages: list[dict],
                       gen_id: int) -> AsyncIterator[str]:
@@ -143,9 +175,17 @@ class GameAgent:
             async for tok in self.llm.stream(messages, gen_id):
                 yield tok
             return
-        msgs = list(messages)
+        # 三层记忆：滑窗只取最近 N 轮原文进 prompt（tool 配对不拆）；
+        # 窗口外的旧回合到间隔后异步压缩进滚动摘要
+        self.memory.maybe_summarize(self.llm)
+        msgs = [messages[0]] + self.memory.windowed()
         for _ in range(MAX_TOOL_ROUNDS):
-            tools = LOBBY_TOOLS if self.engine.state == LOBBY else DM_TOOLS
+            if self.engine.state == LOBBY:
+                tools = LOBBY_TOOLS
+            elif self.engine.state == ENDED:
+                tools = SESSION_TOOLS
+            else:
+                tools = DM_TOOLS
             content_parts: list[str] = []
             tool_calls = None
             async for ev in stream_events(msgs, gen_id, tools=tools):
@@ -159,7 +199,7 @@ class GameAgent:
             # 先收齐所有工具结果，再一次原子 append——history 里出现没有
             # tool 结果跟进的 assistant tool_calls 消息会让 API 400
             pending = []
-            started = False
+            prompt_dirty = False
             for i, tc in enumerate(tool_calls):
                 args = tc["arguments"] if isinstance(tc["arguments"], dict) else {}
                 result = execute_tool(self.engine, tc["name"], args)
@@ -167,8 +207,13 @@ class GameAgent:
                       f"{json.dumps(args, ensure_ascii=False)}) → "
                       f"{json.dumps(result, ensure_ascii=False)[:200]}")
                 pending.append((tc, i, result))
-                if tc["name"] == "start_adventure" and result.get("ok"):
-                    started = True
+                if result.get("ok") and tc["name"] in (
+                        "start_adventure", "advance_scene", "end_game",
+                        "back_to_lobby"):
+                    prompt_dirty = True
+                    if tc["name"] != "back_to_lobby":
+                        # 开场白/场景描述/结局 = 长段叙述：提高打断确认阈值（§5）
+                        self._narration_hook(True)
             extra = [{
                 "role": "assistant",
                 "content": None,
@@ -185,7 +230,7 @@ class GameAgent:
             } for tc, i, result in pending]
             msgs.extend(extra)
             self.history.extend(extra)
-            if started:
-                # state 已是 playing：替换 system prompt 为 DM prompt，
-                # 让续写的 completion 直接以主持人身份说开场白
-                msgs[0] = {"role": "system", "content": dm_prompt(self.engine)}
+            if prompt_dirty:
+                # 状态已迁移（开本/结局/回 lobby）：替换 system prompt，
+                # 让续写的 completion 立即用新身份与新场景信息
+                msgs[0] = {"role": "system", "content": self.system_prompt()}

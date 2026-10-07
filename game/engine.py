@@ -22,6 +22,9 @@ class GameEngine:
         self.world_facts: dict = {}
         self.player_state: dict = {}
         self.scene_id: str | None = None
+        self.last_ending: dict | None = None
+        self.session_note: str | None = None   # 上一局回顾（给推荐员看的）
+        self.on_session_reset = None           # 局间清理回调（memory 压缩）
 
     # ---------- 状态迁移 ----------
 
@@ -41,16 +44,25 @@ class GameEngine:
             raise KeyError("当前没有进行中的剧本")
         for ending in self.adventure["endings"]:
             if ending["id"] == ending_id:
-                self.state = ENDED  # M1 暂不自动回 lobby
+                self.state = ENDED
+                self.last_ending = ending
                 return ending
         raise KeyError(f"结局不存在: {ending_id!r}")
 
     def reset_to_lobby(self) -> None:
+        if self.adventure is not None:
+            note = f"上一局玩的是《{self.adventure['title']}》"
+            if self.last_ending is not None:
+                note += f"，达成了结局「{self.last_ending['id']}」"
+            self.session_note = note + "。"
         self.state = LOBBY
         self.adventure = None
         self.world_facts = {}
         self.player_state = {}
         self.scene_id = None
+        self.last_ending = None
+        if self.on_session_reset is not None:
+            self.on_session_reset()
 
     # ---------- 世界状态 ----------
 

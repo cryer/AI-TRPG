@@ -129,6 +129,17 @@ DM_TOOLS: list[dict] = [
     },
 ]
 
+SESSION_TOOLS: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "back_to_lobby",
+            "description": "结局叙述和复盘都完成后调用，结束整场冒险，回到选本模式",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+]
+
 _DICE_RE = re.compile(r"^\s*(\d+)\s*[dD]\s*(\d+)\s*(?:([+-])\s*(\d+))?\s*$")
 
 START_INSTRUCTION = (
@@ -204,6 +215,12 @@ def execute_tool(engine, name: str, args: dict) -> dict:
                     "narration": ending["narration"],
                     "instruction": "结局已达成。向玩家叙述结局（可口语化改写），"
                                    "然后简短复盘点评玩家本局表现。"}
+        if name == "back_to_lobby":
+            engine.reset_to_lobby()
+            return {"ok": True,
+                    "instruction": "你已回到桌游店老板身份。用一两句话跟玩家"
+                                   "打个招呼（可以自然地点评一句他上一局的表现，"
+                                   "但不要剧透其他剧本），然后等玩家选下一本或道别。"}
         return {"error": f"未知工具: {name}"}
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
