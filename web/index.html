@@ -3,40 +3,119 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>Voice Agent</title>
+<title>AI-TRPG · 单人语音跑团</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
   body {
-    background: radial-gradient(ellipse at 50% 40%, #16213e 0%, #0b1020 60%, #070a14 100%);
-    display: flex; align-items: center; justify-content: center;
-    overflow: hidden; font-family: system-ui, sans-serif;
-    -webkit-user-select: none; user-select: none;
+    background:
+      radial-gradient(ellipse 120% 80% at 50% -10%, rgba(64,52,90,.55) 0%, transparent 55%),
+      radial-gradient(ellipse 90% 70% at 50% 115%, rgba(120,72,32,.28) 0%, transparent 60%),
+      radial-gradient(ellipse at 50% 45%, #131722 0%, #0b0e16 55%, #060810 100%);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    overflow: hidden; font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-user-select: none; user-select: none; color: #d8cdb4;
   }
-  #stage { position: relative; width: 340px; height: 340px; }
+
+  /* ---- 漂浮的余烬 ---- */
+  .ember {
+    position: fixed; bottom: -8px; border-radius: 50%; pointer-events: none;
+    background: radial-gradient(circle, rgba(224,180,92,.9) 0%, rgba(224,180,92,0) 70%);
+    animation: rise linear infinite;
+    opacity: 0;
+  }
+  @keyframes rise {
+    0%   { transform: translateY(0) translateX(0) scale(1); opacity: 0; }
+    12%  { opacity: .8; }
+    85%  { opacity: .25; }
+    100% { transform: translateY(-104vh) translateX(var(--drift)) scale(.4); opacity: 0; }
+  }
+
+  /* ---- 标题区 ---- */
+  header { text-align: center; margin-bottom: 6px; z-index: 2; }
+  header h1 {
+    font-family: "STKaiti", "KaiTi", "Noto Serif SC", "Songti SC", serif;
+    font-size: 34px; font-weight: 700; letter-spacing: .35em; text-indent: .35em;
+    color: #e6d5ac;
+    text-shadow: 0 0 22px rgba(224,180,92,.35), 0 2px 6px rgba(0,0,0,.8);
+  }
+  header .sub {
+    margin-top: 8px; font-size: 12.5px; letter-spacing: .28em; text-indent: .28em;
+    color: rgba(216,205,180,.5);
+  }
+  header .rule {
+    width: 190px; height: 1px; margin: 12px auto 0;
+    background: linear-gradient(90deg, transparent, rgba(201,168,106,.65), transparent);
+    position: relative;
+  }
+  header .rule::after {
+    content: ""; position: absolute; left: 50%; top: -3px; width: 7px; height: 7px;
+    transform: translateX(-50%) rotate(45deg);
+    background: #c9a86a; box-shadow: 0 0 8px rgba(224,180,92,.8);
+  }
+
+  /* ---- 法阵舞台 ---- */
+  #stage { position: relative; width: 340px; height: 340px; margin-top: 4px; }
   canvas { position: absolute; inset: 0; }
+  #sigil {
+    position: absolute; inset: 18px; pointer-events: none;
+    animation: spin 90s linear infinite; opacity: .5;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   #btn {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-    width: 88px; height: 88px; border-radius: 50%; border: none; cursor: pointer;
-    background: #1db954; color: #fff; display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 0 0 0 rgba(29,185,84,.45), 0 8px 32px rgba(0,0,0,.5);
-    transition: background .25s, box-shadow .25s, transform .1s;
-    outline: none;
+    width: 108px; height: 108px; border-radius: 50%; cursor: pointer;
+    border: 1px solid rgba(201,168,106,.55);
+    background:
+      radial-gradient(circle at 35% 30%, rgba(201,168,106,.22) 0%, transparent 55%),
+      linear-gradient(160deg, #232838 0%, #141824 60%, #0d101a 100%);
+    color: #e0b45c;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+    box-shadow: 0 0 0 0 rgba(224,180,92,.4), 0 10px 36px rgba(0,0,0,.65),
+                inset 0 0 18px rgba(0,0,0,.6);
+    transition: color .3s, border-color .3s, box-shadow .3s, transform .1s;
+    outline: none; font-family: inherit;
   }
-  #btn:active { transform: translate(-50%,-50%) scale(.95); }
-  #btn.oncall { background: #e5484d; box-shadow: 0 0 0 0 rgba(229,72,77,.45), 0 8px 32px rgba(0,0,0,.5); }
-  #btn.connecting { background: #d9a514; animation: pulse 1.1s ease-out infinite; }
-  #btn.oncall { animation: pulse-on 2.2s ease-out infinite; }
-  @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(217,165,20,.5), 0 8px 32px rgba(0,0,0,.5); }
-    100% { box-shadow: 0 0 0 26px rgba(217,165,20,0), 0 8px 32px rgba(0,0,0,.5); }
+  #btn:active { transform: translate(-50%,-50%) scale(.94); }
+  #btn .cap {
+    font-size: 11px; letter-spacing: .22em; text-indent: .22em;
+    font-family: "STKaiti", "KaiTi", "Noto Serif SC", serif; color: inherit; opacity: .85;
   }
-  @keyframes pulse-on {
-    0% { box-shadow: 0 0 0 0 rgba(229,72,77,.35), 0 8px 32px rgba(0,0,0,.5); }
-    100% { box-shadow: 0 0 0 30px rgba(229,72,77,0), 0 8px 32px rgba(0,0,0,.5); }
+  #btn.connecting { color: #e8c76a; animation: pulse-gold 1.2s ease-out infinite; }
+  #btn.oncall {
+    color: #9fb0e8; border-color: rgba(123,140,222,.55);
+    animation: pulse-arcane 2.4s ease-out infinite;
   }
-  #btn svg { width: 38px; height: 38px; fill: currentColor; }
-  #btn.oncall svg { transform: rotate(135deg); }
+  @keyframes pulse-gold {
+    0%   { box-shadow: 0 0 0 0 rgba(224,180,92,.45), 0 10px 36px rgba(0,0,0,.65), inset 0 0 18px rgba(0,0,0,.6); }
+    100% { box-shadow: 0 0 0 28px rgba(224,180,92,0), 0 10px 36px rgba(0,0,0,.65), inset 0 0 18px rgba(0,0,0,.6); }
+  }
+  @keyframes pulse-arcane {
+    0%   { box-shadow: 0 0 0 0 rgba(123,140,222,.35), 0 10px 36px rgba(0,0,0,.65), inset 0 0 18px rgba(0,0,0,.6); }
+    100% { box-shadow: 0 0 0 32px rgba(123,140,222,0), 0 10px 36px rgba(0,0,0,.65), inset 0 0 18px rgba(0,0,0,.6); }
+  }
+  #btn svg { width: 40px; height: 40px; stroke: currentColor; fill: none;
+             stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
+  #btn .ico-exit { display: none; }
+  #btn.oncall .ico-dice { display: none; }
+  #btn.oncall .ico-exit { display: block; }
+
+  /* ---- 状态判词 ---- */
+  #status {
+    margin-top: 22px; min-height: 22px; z-index: 2;
+    font-family: "STKaiti", "KaiTi", "Noto Serif SC", serif;
+    font-size: 15.5px; letter-spacing: .18em; text-indent: .18em;
+    color: rgba(230,213,172,.78); text-shadow: 0 1px 4px rgba(0,0,0,.7);
+    transition: opacity .4s;
+  }
+  #status.dim { opacity: .55; }
+
+  footer {
+    position: fixed; bottom: 18px; left: 0; right: 0; text-align: center;
+    font-size: 11px; letter-spacing: .3em; text-indent: .3em;
+    color: rgba(216,205,180,.28); pointer-events: none;
+  }
 
   /* ---- provider 切换开关（右上） ---- */
   #switches {
@@ -45,24 +124,28 @@
   }
   .sw {
     display: flex; align-items: center; gap: 10px;
-    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1);
+    background: rgba(14,17,26,.72); border: 1px solid rgba(201,168,106,.28);
     border-radius: 999px; padding: 5px 6px 5px 14px;
     backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-    box-shadow: 0 4px 18px rgba(0,0,0,.35);
+    box-shadow: 0 4px 18px rgba(0,0,0,.5);
     transition: opacity .2s;
   }
   .sw.loading { opacity: .45; pointer-events: none; }
-  .sw-label { font-size: 12px; letter-spacing: .12em; color: rgba(255,255,255,.55); }
-  .seg { position: relative; display: flex; background: rgba(0,0,0,.35); border-radius: 999px; padding: 3px; }
+  .sw-label {
+    font-size: 12px; letter-spacing: .18em;
+    font-family: "STKaiti", "KaiTi", "Noto Serif SC", serif;
+    color: rgba(216,205,180,.6);
+  }
+  .seg { position: relative; display: flex; background: rgba(0,0,0,.45); border-radius: 999px; padding: 3px; }
   .seg button {
     position: relative; z-index: 1; border: none; background: none; cursor: pointer;
-    color: rgba(255,255,255,.55); font-size: 12px; padding: 5px 14px; border-radius: 999px;
+    color: rgba(216,205,180,.5); font-size: 12px; padding: 5px 14px; border-radius: 999px;
     transition: color .25s; font-family: inherit;
   }
-  .seg button.on { color: #0b1020; font-weight: 600; }
+  .seg button.on { color: #141824; font-weight: 600; }
   .seg .ind {
     position: absolute; top: 3px; bottom: 3px; border-radius: 999px;
-    background: linear-gradient(135deg, #7dd3fc, #34d399);
+    background: linear-gradient(135deg, #e0b45c, #c9a86a);
     transition: left .28s cubic-bezier(.6,.1,.2,1.2), width .28s cubic-bezier(.6,.1,.2,1.2);
   }
   .sw.shake { animation: shake .35s; }
@@ -70,9 +153,47 @@
     0%,100% { transform: translateX(0); } 25% { transform: translateX(-4px); }
     75% { transform: translateX(4px); }
   }
+
+  @media (max-width: 480px) {
+    header h1 { font-size: 26px; }
+    #stage { width: 300px; height: 300px; }
+    #switches { top: 12px; right: 12px; }
+  }
 </style>
 </head>
 <body>
+<header>
+  <h1>夜 话 跑 团</h1>
+  <div class="sub">AI 主持人 · 单人语音跑团</div>
+  <div class="rule"></div>
+</header>
+
+<div id="stage">
+  <svg id="sigil" viewBox="0 0 100 100">
+    <circle cx="50" cy="50" r="48" fill="none" stroke="rgba(201,168,106,.35)" stroke-width=".5" stroke-dasharray="3 5"/>
+    <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(123,140,222,.22)" stroke-width=".4" stroke-dasharray="1 4"/>
+    <polygon points="50,8 86,71 14,71" fill="none" stroke="rgba(201,168,106,.18)" stroke-width=".4"/>
+    <polygon points="50,92 14,29 86,29" fill="none" stroke="rgba(123,140,222,.14)" stroke-width=".4"/>
+  </svg>
+  <canvas id="wave" width="680" height="680" style="width:340px;height:340px"></canvas>
+  <button id="btn" aria-label="开始冒险">
+    <svg class="ico-dice" viewBox="0 0 24 24">
+      <path d="M12 2.5 L20.5 7.2 V16.8 L12 21.5 L3.5 16.8 V7.2 Z"/>
+      <path d="M12 21.5 V12 M12 12 L3.5 7.2 M12 12 L20.5 7.2"/>
+      <path d="M12 12 L7.75 19.15 M12 12 L16.25 19.15"/>
+    </svg>
+    <svg class="ico-exit" viewBox="0 0 24 24">
+      <path d="M14 3.5 H5.5 V20.5 H14"/>
+      <path d="M10.5 12 H21 M17.8 8.6 L21 12 L17.8 15.4"/>
+    </svg>
+    <span class="cap">开 启</span>
+  </button>
+</div>
+
+<div id="status">掷下骰子，开启你的冒险</div>
+
+<footer>自由行动 · 随时打断 · 你的选择决定结局</footer>
+
 <div id="switches">
   <div class="sw" id="sw-asr">
     <span class="sw-label">识别</span>
@@ -86,20 +207,16 @@
     <span class="sw-label">合成</span>
     <div class="seg">
       <div class="ind"></div>
-      <button data-v="sherpa">本地</button>
+      <button data-v="cosyvoice">本地</button>
       <button data-v="volcengine">云端</button>
     </div>
   </div>
 </div>
-<div id="stage">
-  <canvas id="wave" width="680" height="680" style="width:340px;height:340px"></canvas>
-  <button id="btn" aria-label="call">
-    <svg viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
-  </button>
-</div>
+
 <script>
 'use strict';
 const btn = document.getElementById('btn');
+const statusEl = document.getElementById('status');
 const canvas = document.getElementById('wave');
 const g = canvas.getContext('2d');
 const W = canvas.width, H = canvas.height, CX = W / 2, CY = H / 2;
@@ -113,11 +230,36 @@ let playTime = 0, scheduled = [];
 let userLevel = 0, agentLevel = 0;
 const barVals = new Float32Array(BARS);
 
-// ---------- 通话生命周期 ----------
+// ---------- 状态判词 ----------
+
+function setStatus(text, dim) {
+  if (statusEl.textContent !== text) statusEl.textContent = text;
+  statusEl.classList.toggle('dim', !!dim);
+}
+
+// ---------- 余烬 ----------
+
+(function embers() {
+  for (let i = 0; i < 14; i++) {
+    const e = document.createElement('div');
+    e.className = 'ember';
+    const size = 3 + Math.random() * 5;
+    e.style.width = e.style.height = size + 'px';
+    e.style.left = (5 + Math.random() * 90) + 'vw';
+    e.style.setProperty('--drift', ((Math.random() - 0.5) * 160) + 'px');
+    const dur = 9 + Math.random() * 14;
+    e.style.animationDuration = dur + 's';
+    e.style.animationDelay = (-Math.random() * dur) + 's';
+    document.body.appendChild(e);
+  }
+})();
+
+// ---------- 对局生命周期 ----------
 
 async function startCall() {
   state = 'connecting';
   btn.className = 'connecting';
+  setStatus('正在唤醒主持人……', true);
   try {
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
@@ -150,6 +292,8 @@ async function startCall() {
     });
     state = 'incall';
     btn.className = 'oncall';
+    btn.querySelector('.cap').textContent = '离 开';
+    setStatus('主持人已就位，洗耳恭听', false);
   } catch (err) {
     console.error(err);
     hangup();
@@ -159,6 +303,8 @@ async function startCall() {
 function hangup() {
   state = 'idle';
   btn.className = '';
+  btn.querySelector('.cap').textContent = '开 启';
+  setStatus('掷下骰子，开启你的冒险', false);
   if (ws) { try { ws.close(); } catch (e) {} ws = null; }
   stopPlayback();
   if (workletNode) { workletNode.disconnect(); workletNode = null; }
@@ -217,26 +363,38 @@ function sampleUserLevel() {
   userLevel = Math.max(Math.min(1, rms * 6), userLevel * 0.85);
 }
 
+let lastSpeaker = null;
 function draw(t) {
   requestAnimationFrame(draw);
   g.clearRect(0, 0, W, H);
   if (state === 'idle') {
-    // 待机：缓慢呼吸的淡色圆环
+    // 待机：缓慢呼吸的暗金圆环
     const r = R0 + Math.sin(t / 900) * 4;
     g.beginPath();
     g.arc(CX, CY, r, 0, Math.PI * 2);
-    g.strokeStyle = 'rgba(120,140,180,.25)';
+    g.strokeStyle = 'rgba(201,168,106,.22)';
     g.lineWidth = 3;
     g.stroke();
+    lastSpeaker = null;
     return;
   }
   sampleUserLevel();
   agentLevel *= 0.94;
   const level = Math.max(userLevel, agentLevel);
   const speakingAgent = agentLevel > userLevel && agentLevel > 0.02;
-  // 用户=青绿，agent=蓝紫，过渡色按电平占比
-  const hue = speakingAgent ? 232 : 158;
+  // 玩家=烛金，主持人=幽蓝，过渡色按电平占比
+  const hue = speakingAgent ? 232 : 40;
+  const sat = speakingAgent ? 55 : 70;
   const base = 6 + level * 64;
+
+  // 状态判词跟随说话方
+  const speaker = speakingAgent ? 'agent' : (userLevel > 0.05 ? 'user' : null);
+  if (speaker !== lastSpeaker) {
+    lastSpeaker = speaker;
+    if (speaker === 'agent') setStatus('主持人正在讲述……', false);
+    else if (speaker === 'user') setStatus('你在讲述自己的行动……', false);
+    else setStatus('轮到你了——说出你的行动', false);
+  }
 
   for (let i = 0; i < BARS; i++) {
     const wave = 0.55 + 0.45 * Math.sin(t / 260 + i * 0.55);
@@ -249,7 +407,7 @@ function draw(t) {
     g.beginPath();
     g.moveTo(x1, y1);
     g.lineTo(x2, y2);
-    g.strokeStyle = `hsla(${hue}, 75%, ${55 + level * 20}%, ${0.35 + level * 0.6})`;
+    g.strokeStyle = `hsla(${hue}, ${sat}%, ${55 + level * 20}%, ${0.35 + level * 0.6})`;
     g.lineWidth = 5;
     g.lineCap = 'round';
     g.stroke();
