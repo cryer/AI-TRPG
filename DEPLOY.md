@@ -140,11 +140,44 @@ python -m voice.web_server --config configs/trpg.json --port 16891 --https-port 
 ```
 
 - 本机玩：浏览器打开 `http://localhost:16891`
-- 手机/远程玩：浏览器调麦克风要求 HTTPS，先生成自签证书
-  `./deploy/gen_cert.sh <服务器IP>`，然后访问 `https://<服务器IP>:16892`
-  （首次点「继续前往」信任证书）
 - 可选 CLI 调试（不需要浏览器，本机麦克风直接对话）：
   `python -m voice.duplex --config configs/trpg.json`
+
+### 7.1 HTTPS 证书（服务器/局域网部署必做）
+
+**为什么必须 HTTPS**：浏览器只允许在「安全上下文」里调麦克风
+（`getUserMedia`）。`localhost`/`127.0.0.1` 豁免，但用服务器 IP 或局域网
+IP 访问时**必须 HTTPS**，否则页面打不开麦克风、无法通话。
+
+**生成自签证书（本项目自带脚本，推荐）**：
+
+```bash
+./deploy/gen_cert.sh <服务器IP>
+# 例：./deploy/gen_cert.sh 203.0.113.10
+```
+
+脚本做的事（`deploy/gen_cert.sh`，依赖 openssl，Linux/Git Bash 自带）：
+
+- 用 `openssl req -x509` 生成 2048 位 RSA 自签证书，有效期 825 天
+  （浏览器对自签证书接受的上限）；
+- **SAN 里写入服务器 IP** + `127.0.0.1` + `localhost`——SAN 必须包含访问
+  用的那个 IP，否则浏览器会直接拒绝，这是最容易漏的一点；
+- 输出 `certs/cert.pem` 和 `certs/key.pem`（`certs/` 已 gitignore，
+  不会入库）。
+
+`web_server` 启动时检测到 `certs/cert.pem` 存在就会自动在 `--https-port`
+（默认 16892）上启用 TLS，无需额外配置。随后：
+
+1. **放行端口**：云服务器去控制台安全组/防火墙放行 HTTPS 端口（如
+   16892），只放行 22 是不够的；本机防火墙同理；
+2. 浏览器访问 `https://<服务器IP>:16892`，首次会警告证书不受信任，
+   点「高级 → 继续前往」即可（自签证书的正常现象）；
+3. IP 变了要重新跑一次 `gen_cert.sh`（SAN 里写死了旧 IP）。
+
+**有域名时的升级方案（可选）**：用 Caddy 反代自动签发受信任的
+Let's Encrypt 证书，免点「继续前往」。仓库 `caddy/` 下有 `Caddyfile`
+模板和 `deploy/start_caddy.sh` / `stop_caddy.sh`，把模板里的域名改成
+自己的、放行 443 即可。没有域名就用上面的自签方案，功能完全一样。
 
 启动日志里应看到 `provider 上线：asr=... tts=...`；本地 TTS 首次加载模型需要
 10–60 秒（GPU 预热 + 声线模板预建），看到 `声线模板预建完成` 才算就绪。
@@ -167,5 +200,6 @@ python -m voice.web_server --config configs/trpg.json --port 16891 --https-port 
 - [ ] `scripts/test_voice_pipeline.py` 全部 OK
 - [ ] `.env` 已建且含 KIMI_API_KEY（形态 A 还需 VOLCENGINE_API_KEY）
 - [ ] 服务启动日志出现 `provider 上线`（形态 B 还有 `声线模板预建完成`）
+- [ ] 服务器/局域网部署：已跑 `./deploy/gen_cert.sh <服务器IP>` 且安全组/防火墙放行了 HTTPS 端口
 - [ ] 浏览器能打开页面并看到跑团风格 UI；点击「开启」按钮能连上并听到 AI 说话
 - [ ] 告知用户：访问地址、用的哪个配置文件、形态 A/B、调参文档位置（`docs/local-tts.md` / `docs/cloud-tts.md`）
