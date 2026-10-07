@@ -190,7 +190,9 @@ function onWsMessage(e) {
   const s = audioCtx.createBufferSource();
   s.buffer = buf;
   s.connect(audioCtx.destination);
-  if (playTime < audioCtx.currentTime) playTime = audioCtx.currentTime + 0.06;
+  // 欠载重缓冲：本地 TTS 合成可能短时跟不上播放（hop 突发到达），
+  // 重新对准时多留 0.3s 余量，让后续 chunk 攒出缓冲，避免反复卡顿
+  if (playTime < audioCtx.currentTime) playTime = audioCtx.currentTime + 0.3;
   s.start(playTime);
   playTime += buf.duration;
   scheduled.push(s);

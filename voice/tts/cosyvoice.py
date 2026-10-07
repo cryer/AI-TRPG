@@ -47,7 +47,9 @@ class CosyVoiceTTS:
                  voices: dict | None = None,
                  default_voice: str = "narrator",
                  speed: float = 1.0, fp16: bool = True,
-                 use_ort_estimator: bool = True,
+                 use_ort_estimator: bool = True, nfe: int = 10,
+                 load_jit: bool = False,
+                 cudnn_benchmark: bool = False,
                  sample_rate: int = 16000):
         self.repo_path = repo_path
         self.model_dir = model_dir
@@ -57,6 +59,15 @@ class CosyVoiceTTS:
         self.speed = speed
         self.fp16 = fp16
         self.use_ort_estimator = use_ort_estimator
+        # flow matching 欧拉步数（官方默认 10）。解码器是唯一瓶颈，
+        # 步数线性省时间；RTF>1 的中低端卡可降到 5~6 换流畅度
+        self.nfe = nfe
+        # flow encoder 是否用官方 JIT 版（flow.encoder.fp16.zip）。
+        # 实测 RTX 3050/WDDM 上 JIT 版反而慢一倍多（RTF 1.1→2.1），默认关
+        self.load_jit = load_jit
+        # benchmark 模式会按新形状重新调优：真实对局每句长度都不同，
+        # 实测 RTX 3050 上关闭更快（RTF 1.05→0.95），长句尤为明显
+        self.cudnn_benchmark = cudnn_benchmark
         self.sample_rate = sample_rate
         self._model = None
         self._lock = threading.Lock()       # GPU 串行
@@ -70,7 +81,7 @@ class CosyVoiceTTS:
             return
         try:
             import torch
-            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.benchmark = self.cudnn_benchmark
             for p in (self.repo_path,
                       os.path.join(self.repo_path, "third_party", "Matcha-TTS")):
                 if p not in sys.path:
@@ -80,10 +91,12 @@ class CosyVoiceTTS:
                     f"CosyVoice2 模型目录不存在: {self.model_dir}（用 modelscope 下载："
                     f"modelscope download --model iic/CosyVoice2-0.5B --local_dir {self.model_dir}）")
             from cosyvoice.cli.cosyvoice import CosyVoice2
-            self._model = CosyVoice2(self.model_dir, load_jit=False,
+            self._model = CosyVoice2(self.model_dir, load_jit=self.load_jit,
                                      load_trt=False, fp16=self.fp16)
             if self.use_ort_estimator:
                 self._patch_ort_estimator()
+            if self.nfe != 10:
+                self._patch_nfe()
             if self.fp16:
                 # autocast 只转计算不转存储；权重真转 fp16 后 LLM 每 token
                 # 显存带宽减半（实测 55ms→19ms，RTX 3050）
@@ -124,6 +137,20 @@ class CosyVoiceTTS:
             return torch.from_numpy(out).to(x.device)
 
         cfm.forward_estimator = ort_forward_estimator
+
+    def _patch_nfe(self):
+        """把 flow matching 的欧拉步数钳到 self.nfe（flow.py 里硬编码 10）。
+
+        CFM.forward 是普通实例方法，遮蔽即可；n_timesteps 全以关键字传入。
+        """
+        cfm = self._model.model.flow.decoder
+        orig = type(cfm).forward
+        nfe = self.nfe
+
+        def clamped_forward(mu, mask, n_timesteps, **kw):
+            return orig(cfm, mu, mask, min(n_timesteps, nfe), **kw)
+
+        cfm.forward = clamped_forward
 
     # ---------- 前端特征缓存（声线+语气 → 模型输入模板） ----------
 

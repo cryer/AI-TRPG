@@ -42,6 +42,8 @@
     "default_voice": "narrator_m",
     "fp16": true,
     "use_ort_estimator": true,
+    "nfe": 5,
+    "cudnn_benchmark": false,
     "voices": {
       "narrator_m": {
         "prompt_wav": "./models/voices/narrator_m.wav",
