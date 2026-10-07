@@ -10,7 +10,8 @@
   合并成一个合成批次（≤MERGE_MAX_CHARS），prosody 在一次调用内连续规划，
   句间语气/语速不跳变，RTF 也更好；非阻塞拉取，不拖慢首音。
 - 声线状态跨句保持：NPC 台词被切成多句时，只要引号（「」/“”等）未闭合，
-  后续无标记句继承该 NPC 声线（DM 只在台词开头标一次 ⟦v:…⟧，回旁白不标）。
+  后续无标记句继承该 NPC 声线（DM 只在台词开头标一次 ⟦v:…⟧，回旁白不标）；
+  无标记的新引号继承本回合上一个 NPC 声线（两段台词中间插叙述的场景）。
 - flow matching 解码器走 onnxruntime CUDA（`use_ort_estimator`，默认开）：
   模型自带的 flow.decoder.estimator.fp32.onnx 在 WDDM/Windows 下比 torch eager
   快约 10 倍（实测 67M UNet 单次 500ms→49ms），是 6GB 级显卡实时的关键。
@@ -39,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import audioop
 import os
+import re
 import sys
 import threading
 import time
@@ -46,7 +48,7 @@ from typing import AsyncIterator, Callable
 
 import numpy as np
 
-from voice.tts.base import AudioChunk, parse_tagged_stateful
+from voice.tts.base import AudioChunk, _parse_tag, _TAG_STRIP_RE
 
 CHUNK_MS = 100
 NATIVE_SR = 24000  # CosyVoice2 输出采样率
@@ -59,14 +61,11 @@ DEFAULT_EMOTIONS = ["平静", "紧张", "恐惧", "愤怒", "悲伤", "神秘",
                     "激动", "低语", "恭敬", "犹豫", "温柔", "威严"]
 
 # NPC 台词的引号形式：LLM 实际会混用「」和“”（真人局实锤），
-# 跨句声线继承按所有形式的开合计数
+# 跨句声线继承按所有形式处理
 _QUOTE_OPEN = "「『“"
 _QUOTE_CLOSE = "」』”"
-
-
-def _quote_delta(s: str) -> int:
-    return (sum(s.count(c) for c in _QUOTE_OPEN)
-            - sum(s.count(c) for c in _QUOTE_CLOSE))
+# 句流切分：完整标记 / 引号开 / 引号合
+_TOKEN_RE = re.compile(r"(⟦[^⟧]*⟧|[「『“」』”])")
 
 
 class CosyVoiceTTS:
@@ -309,17 +308,23 @@ class CosyVoiceTTS:
     async def _segment_stream(self, sentences) -> AsyncIterator[tuple[str, str, str | None]]:
         """句流 → 合并后的 (text, voice, emotion) 合成批次流。
 
-        - 声线跨句保持：引号（「」/『』/“”）未闭合时，无标记句继承当前
-          声线/情绪（NPC 台词被分句器切成多句，DM 只在开头标一次）；
-          引号外的无标记句回到默认声线（旁白）。
-        - 同 (voice, emotion) 的相邻片段合并（≤MERGE_MAX_CHARS）：一次合成
+        引号感知的声线状态机（逐 token 走查标记 ⟦…⟧ 与引号开合）：
+        - 引号（「」/『』/“”）未闭合时，无标记句继承当前声线/情绪
+          （NPC 台词被分句器切成多句，DM 只在开头标一次）。
+        - 引号闭合后，无标记文本回到默认声线（旁白）。
+        - 无标记的**新引号**继承本回合上一个 NPC 声线：NPC 两段台词中间
+          插叙述/动作时 DM 不会重新标记（「他顿了顿，“还有一件事。”」），
+          不继承的话第二段就掉成旁白（真人局实锤）。
+        - 同 (voice, emotion) 的相邻片段合并（≤merge_max_chars）：一次合成
           调用内 prosody 连续规划，句间语气/语速不跳变，RTF 也更好。
-          下一句非阻塞拉取（MERGE_WAIT_S 宽限），上游没就绪就先合成，
+          下一句非阻塞拉取（merge_wait_s 宽限），上游没就绪就先合成，
           不拖慢首音。
         """
         it = sentences.__aiter__()
-        cur_voice, cur_emotion = "", None
-        quote_depth = 0
+        explicit = ("", None)      # 最近一次标记设置的声线（引号开/合后失效）
+        last_voice = ("", None)    # 本回合上一个 NPC 声线（供无标记新引号继承）
+        quote_voice = ("", None)   # 当前引号内使用的声线
+        in_quote = False
         buf: list[str] = []
         buf_key = ("", None)
         upstream_end = False
@@ -354,12 +359,31 @@ class CosyVoiceTTS:
                 if upstream_end:
                     return
                 continue
-            inherit = quote_depth > 0
-            start = (cur_voice, cur_emotion) if inherit else ("", None)
-            segs, cur_voice, cur_emotion = parse_tagged_stateful(raw, *start)
-            quote_depth = max(0, quote_depth + _quote_delta(raw))
-            for text, v, e in segs:
-                key = (v, e)
+            for tok in _TOKEN_RE.split(raw):
+                if not tok:
+                    continue
+                if tok[0] == "⟦" and tok.endswith("⟧"):
+                    v, e = _parse_tag(tok[1:-1])
+                    if v:
+                        explicit = (v, e)
+                        last_voice = explicit
+                        if in_quote:
+                            quote_voice = explicit
+                    continue
+                if tok in _QUOTE_OPEN:
+                    in_quote = True
+                    quote_voice = explicit if explicit[0] else last_voice
+                    explicit = ("", None)
+                    continue
+                if tok in _QUOTE_CLOSE:
+                    in_quote = False
+                    quote_voice = ("", None)
+                    explicit = ("", None)
+                    continue
+                text = _TAG_STRIP_RE.sub("", tok)
+                if not text.strip():
+                    continue
+                key = quote_voice if in_quote else explicit
                 if buf and key != buf_key:
                     yield "".join(buf), buf_key[0], buf_key[1]
                     buf = []

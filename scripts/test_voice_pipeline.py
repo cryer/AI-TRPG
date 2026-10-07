@@ -131,6 +131,30 @@ async def main():
           "抬了抬下巴" in segs6[-1][0], detail=str(segs6))
     check("弯引号情绪随标记携带", any(e == "低语" for t, v, e in segs6))
 
+    # NPC 两段台词中间插叙述/动作：第二段无标记引号必须继承上一个 NPC 声线
+    segs7 = await segments_of([
+        "⟦v:npc_male_old e:恭敬⟧“您路上辛苦了。”",
+        "他压低声音，朝走廊瞟了一眼，",
+        "“还有一件事，我只告诉您一个人。”",
+        "说罢，他退回了阴影里。",
+    ])
+    npc7 = [t for t, v, e in segs7 if v == "npc_male_old"]
+    check("无标记新引号继承上一 NPC 声线", bool(npc7) and
+          "只告诉您一个人" in "".join(npc7), detail=str(segs7))
+    check("段间叙述是默认声线", any(v == "" and "压低声音" in t
+                                    for t, v, e in segs7), detail=str(segs7))
+    check("结尾旁白是默认声线", segs7[-1][1] == "", detail=str(segs7))
+    check("新引号情绪继承上一 NPC", any(v == "npc_male_old" and e == "恭敬"
+                                        for t, v, e in segs7), detail=str(segs7))
+
+    # 不同 NPC 新台词带标记 → 正确切换，不被上一个 NPC 继承逻辑污染
+    segs8 = await segments_of([
+        "⟦v:npc_male_old⟧“我没杀人。”",
+        "⟦v:npc_female⟧“他说谎。”",
+    ])
+    check("标记切换优先于继承", [v for _, v, _ in segs8] ==
+          ["npc_male_old", "npc_female"], detail=str(segs8))
+
     print("== 4. _resolve_voice：声线 id 容错 ==")
     tts2 = CosyVoiceTTS(voices={v: {"prompt_wav": "x", "instruct": ""} for v in
                                 ("narrator_m", "npc_female", "npc_female_young",
