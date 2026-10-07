@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="760" height="900" viewBox="0 0 760 900">
-  <!-- 占位图：UI 示意图（正式截图后请替换为 assets/ui-main.png 等小体积图片） -->
+  <!-- 「夜话跑团」主题 UI 示意图 -->
   <defs>
     <radialGradient id="bg" cx="50%" cy="42%" r="75%">
       <stop offset="0%" stop-color="#131722"/>

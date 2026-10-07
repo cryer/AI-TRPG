@@ -4,9 +4,11 @@
 开口说话就能玩：AI 先以「剧本推荐员」身份帮你选本，然后切换成该剧本的
 专属主持人，带完整局——叙事、扮演 NPC、掷骰判定、多结局收尾，最后复盘点评。
 
-![UI 示意](assets/screenshot-main.svg)
+<p align="center">
+  <img src="assets/screenshot-main.svg" width="420" alt="夜话跑团 UI">
+</p>
 
-> 正式 UI 截图补充中（`assets/` 占位）。实际界面为悬疑奇幻风格的「夜话跑团」主题。
+悬疑奇幻风格的「夜话跑团」主题界面。
 
 ## 玩法
 
