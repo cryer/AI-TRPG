@@ -1,7 +1,34 @@
 numpy==1.26.4
 sounddevice==0.5.6
-onnxruntime==1.17.1
+onnxruntime==1.17.1; sys_platform == 'win32'
 websockets==16.1
 aiohttp==3.14.3
 python-dotenv==1.1.0
 sherpa-onnx==1.12.40
+
+# --- CosyVoice2 本地 TTS（GPU 推理子集，版本均为本地实测可用组合）---
+# Linux 上 onnxruntime-gpu 与 onnxruntime 同命名空间互斥，只装 gpu 版（含 CPU provider）
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.3.1
+torchaudio==2.3.1
+onnxruntime-gpu==1.17.1; sys_platform == 'linux'
+conformer==0.3.2
+diffusers==0.29.0
+transformers==4.51.3
+modelscope==1.40.1
+wetext==0.0.4
+HyperPyYAML==1.2.3
+inflect==7.5.0
+librosa==0.11.0
+lightning==2.6.6
+soundfile==0.14.0
+hydra-core==1.3.7
+omegaconf==2.3.1
+networkx==3.4.2
+onnx==1.22.0
+pyworld==0.3.5
+rich==15.0.0
+x-transformers==2.31.7
+protobuf==4.25.3
+pyarrow==25.0.1
+grpcio==1.81.1

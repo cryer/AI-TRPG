@@ -69,7 +69,7 @@ _TOKEN_RE = re.compile(r"(⟦[^⟧]*⟧|[「『“」』”])")
 
 
 class CosyVoiceTTS:
-    def __init__(self, repo_path: str = r"vendor/CosyVoice",
+    def __init__(self, repo_path: str = "vendor/CosyVoice",
                  model_dir: str = "models/CosyVoice2-0.5B",
                  voices: dict | None = None,
                  default_voice: str = "narrator",
@@ -80,7 +80,12 @@ class CosyVoiceTTS:
                  emotions: list | None = None,
                  merge_max_chars: int = 150,
                  merge_wait_s: float = 0.05,
+                 cuda_visible_devices: str | None = None,
                  sample_rate: int = 16000):
+        # 多卡服务器选卡（如 "6"）：必须在首次 CUDA 初始化前设置。
+        # 本项目 VAD/ASR 都走 CPU，CUDA 由本类首次触碰，__init__ 里设置即可
+        if cuda_visible_devices is not None:
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(cuda_visible_devices)
         self.repo_path = repo_path
         self.model_dir = model_dir
         # 声线注册表：{id: {"prompt_wav": ..., "instruct": ...}}

@@ -1,0 +1,16 @@
+{
+    auto_https disable_redirects
+}
+
+# sslip.io 泛域名：任意 *.116-169-215-214.sslip.io 都解析到 203.0.113.10。
+# 与 voice-agent 同款方案（Caddy + ACME TLS-ALPN 签发，需 443 对公网可达）。
+# 注意：443 全机只能有一个监听者；若 voice-agent 的 caddy 也在跑，
+# 请把两个域名合并到同一个 caddy 实例，不要同时起两个。
+trpg.116-169-215-214.sslip.io {
+    tls {
+        issuer acme {
+            disable_http_challenge
+        }
+    }
+    reverse_proxy 127.0.0.1:16891
+}

@@ -9,6 +9,15 @@ __pycache__/
 # 运行产物
 reports/
 certs/
+server.pid
+
+# uv 虚拟环境（服务器部署在项目内建 .venv）
+.venv/
+
+# caddy 反代：Caddyfile 入库，二进制/日志/证书数据不入库
+caddy/caddy
+caddy/caddy.log
+caddy/caddy.pid
 
 # 模型文件（CosyVoice2 约 5.3GB + 声线参考音；参考音可用 scripts/gen_voice_refs.py 再生成）
 models/
