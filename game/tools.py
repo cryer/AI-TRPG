@@ -10,7 +10,36 @@ import json
 import random
 import re
 
+from game.engine import LOBBY
 from game.script_loader import find_adventure
+
+START_ADVENTURE_TOOL: dict = {
+    "type": "function",
+    "function": {
+        "name": "start_adventure",
+        "description": "开始一场冒险（切换为该剧本的主持人模式）。玩家明确选定剧本时调用；"
+                       "对局中途玩家想换剧本、或要求重开当前剧本时，也必须调用它"
+                       "（会放弃当前进度），只在口头上答应是不会真正切换的",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "剧本 id 或标题"},
+            },
+            "required": ["id"],
+        },
+    },
+}
+
+BACK_TO_LOBBY_TOOL: dict = {
+    "type": "function",
+    "function": {
+        "name": "back_to_lobby",
+        "description": "结束整场冒险，回到选本大厅（放弃当前对局进度）。"
+                       "结局复盘完成后调用；对局中途玩家明确说不想玩了、"
+                       "要出去换本或离开时也可以调用",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+}
 
 LOBBY_TOOLS: list[dict] = [
     {
@@ -35,20 +64,7 @@ LOBBY_TOOLS: list[dict] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "start_adventure",
-            "description": "玩家明确选定剧本后，开始这场冒险（切换为主持人模式）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string", "description": "剧本 id 或标题"},
-                },
-                "required": ["id"],
-            },
-        },
-    },
+    START_ADVENTURE_TOOL,
 ]
 
 DM_TOOLS: list[dict] = [
@@ -129,16 +145,12 @@ DM_TOOLS: list[dict] = [
     },
 ]
 
-SESSION_TOOLS: list[dict] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "back_to_lobby",
-            "description": "结局叙述和复盘都完成后调用，结束整场冒险，回到选本模式",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-]
+SESSION_TOOLS: list[dict] = [BACK_TO_LOBBY_TOOL]
+
+# 对局中途的会话控制（playing/ended 状态都挂到 DM 工具集上）：
+# 没有这两个工具，DM 遇到「换个本」「重开」「不玩了」只能口头答应，
+# 状态机其实纹丝不动——这是实测踩过的坑（玩家被永久困在当前剧本）
+SESSION_CONTROL_TOOLS: list[dict] = [START_ADVENTURE_TOOL, BACK_TO_LOBBY_TOOL]
 
 _DICE_RE = re.compile(r"^\s*(\d+)\s*[dD]\s*(\d+)\s*(?:([+-])\s*(\d+))?\s*$")
 
@@ -189,6 +201,10 @@ def execute_tool(engine, name: str, args: dict) -> dict:
             if adv is None:
                 return {"error": f"没有找到剧本 {args.get('id')!r}，"
                                  f"请先用 list_adventures 查看可选剧本"}
+            if engine.state != LOBBY:
+                # 局中途换本/重开：先回大厅清场（history 与记忆一并清理，
+                # 避免旧局污染新局），再开新本
+                engine.reset_to_lobby()
             engine.start(adv["id"])
             return {"ok": True, "id": adv["id"], "title": adv["title"],
                     "opening": adv["opening"],

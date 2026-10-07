@@ -18,9 +18,10 @@ from typing import AsyncIterator
 from game.engine import GameEngine, LOBBY, PLAYING, ENDED
 from game.memory import ConversationMemory
 from game.script_loader import load_adventures
-from game.tools import DM_TOOLS, LOBBY_TOOLS, SESSION_TOOLS, execute_tool
+from game.tools import DM_TOOLS, LOBBY_TOOLS, SESSION_CONTROL_TOOLS, execute_tool
 
-MAX_TOOL_ROUNDS = 5  # 防死循环
+MAX_TOOL_ROUNDS = 5      # 防死循环
+MAX_EMPTY_RETRIES = 2    # LLM 空回复（打断后易发）自动重试次数
 
 LOBBY_PROMPT = (
     "你是一家桌游店的老板，正在用语音电话接待一位想玩单人跑团剧本的顾客。"
@@ -49,7 +50,13 @@ _DM_BASE_RULES = (
     "防剧透：线索要埋在场景描述里让玩家自己发现，绝不直接念出 clues 的内容；"
     "结局的判定条件你知道，但不要向玩家透露。"
     "记录：玩家获得关键道具、触发关键事件、发现重要线索时，调用 record_fact 写进世界状态；"
-    "玩家明确移动到新场景时调用 advance_scene；达成某个结局条件时调用 end_game。"
+    "玩家明确移动到新场景时调用 advance_scene。"
+    "结局判定：只要剧情走到任何一个结局（包括玩家被逐出、死亡、放弃等失败结局），"
+    "必须先调用 end_game 再叙述结局——只在叙述里宣布「你触发了结局」而不调用工具，"
+    "这局在系统里就没有真正结束。"
+    "会话控制：玩家想换剧本、重开当前剧本、或中途离场时，必须调用 start_adventure"
+    "（换本/重开）或 back_to_lobby（回选本大厅）。只有调用工具才能真正切换，"
+    "口头答应不算数；在工具调用成功前，绝不许编造其他剧本的开场或内容。"
     "线索揭示：当前场景的线索（clues）你知道，但绝不能直接念出来——只有当玩家的"
     "具体行动覆盖了该线索的 discover_hint，才把线索内容自然地埋进你的描述里；"
     "玩家的行动不够具体时就只给表象，引导他说得更具体。"
@@ -131,7 +138,8 @@ def dm_prompt(engine: GameEngine, memory: ConversationMemory | None = None,
         parts.append(
             "【本局已结束】结局已定，不要再推进新的剧情或判定。向玩家做完结局"
             "叙述后，简短复盘点评他本局的表现（做得好的地方、错过的关键线索），"
-            "复盘完成后调用 back_to_lobby 工具结束整场冒险。")
+            "复盘完成后调用 back_to_lobby 工具结束整场冒险。如果玩家急着再开一局"
+            "（同一本或换一本），直接调用 start_adventure，不必先回大厅。")
     parts.append(
         "【对话历史说明】\n开场白之前的对话历史是玩家选剧本的过程（那时你是"
         "推荐员），从现在起你已经是主持人，不要再以推荐员自居。")
@@ -274,13 +282,15 @@ class GameAgent:
         # 窗口外的旧回合到间隔后异步压缩进滚动摘要
         self.memory.maybe_summarize(self.llm)
         msgs = [messages[0]] + self.memory.windowed()
+        empty_retries = 0
         for _ in range(MAX_TOOL_ROUNDS):
             if self.engine.state == LOBBY:
                 tools = LOBBY_TOOLS
             elif self.engine.state == ENDED:
-                tools = SESSION_TOOLS
+                tools = SESSION_CONTROL_TOOLS
             else:
-                tools = DM_TOOLS
+                # 对局中途也要能换本/重开/离场，否则玩家会被困在当前剧本
+                tools = DM_TOOLS + SESSION_CONTROL_TOOLS
             content_parts: list[str] = []
             tool_calls = None
             async for ev in self._voice_rewrite(
@@ -291,6 +301,13 @@ class GameAgent:
                 else:
                     tool_calls = ev["tool_calls"]
             if not tool_calls:
+                # 空回复（无正文无工具调用）：打断后的下一轮容易触发，
+                # 不逐字重试玩家只能面对沉默。temperature=1 下重试是新采样
+                if not "".join(content_parts).strip() \
+                        and empty_retries < MAX_EMPTY_RETRIES:
+                    empty_retries += 1
+                    print(f"[game] LLM 空回复，重试第 {empty_retries} 次")
+                    continue
                 return
             # 先收齐所有工具结果，再一次原子 append——history 里出现没有
             # tool 结果跟进的 assistant tool_calls 消息会让 API 400
