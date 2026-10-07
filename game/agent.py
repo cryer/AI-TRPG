@@ -46,8 +46,13 @@ _DM_BASE_RULES = (
     "绝不许自己编点数或无视点数。"
     "防剧透：线索要埋在场景描述里让玩家自己发现，绝不直接念出 clues 的内容；"
     "结局的判定条件你知道，但不要向玩家透露。"
-    "记录：玩家获得关键道具、触发关键事件时，调用 record_fact 写进世界状态；"
-    "玩家移动到新场景时调用 advance_scene；达成某个结局条件时调用 end_game。"
+    "记录：玩家获得关键道具、触发关键事件、发现重要线索时，调用 record_fact 写进世界状态；"
+    "玩家明确移动到新场景时调用 advance_scene；达成某个结局条件时调用 end_game。"
+    "线索揭示：当前场景的线索（clues）你知道，但绝不能直接念出来——只有当玩家的"
+    "具体行动覆盖了该线索的 discover_hint，才把线索内容自然地埋进你的描述里；"
+    "玩家的行动不够具体时就只给表象，引导他说得更具体。"
+    "检索：玩家问及或前往你不掌握细节的场景、或需要某个 NPC 的秘密资料时，"
+    "调用 lookup_scene 查询，不要凭印象编造。"
     "打断处理：玩家可能随时打断你的叙述。被打断后不要重播整段，"
     "直接接住玩家的新意图继续（比如「好，你停在门口——你贴上门板仔细听……」）。"
     "语音约束：你的所有回复都会被语音合成朗读出来。口语化叙述，单次回复"
@@ -79,9 +84,28 @@ def dm_prompt(engine: GameEngine) -> str:
     if scene is not None:
         scene_txt = (f"当前场景「{scene['title']}」(id={scene['id']}):\n"
                      f"{scene['description']}")
+        if scene.get("exits"):
+            exits = []
+            for ex in scene["exits"]:
+                target = engine.find_scene(ex)
+                exits.append(f"{ex}（{target['title']}）" if target else ex)
+            scene_txt += "\n可去的场景: " + "、".join(exits)
+        if scene.get("clues"):
+            clue_lines = "\n".join(
+                f"- [{c['id']}] {c['content']}（揭示条件: {c['discover_hint']}）"
+                for c in scene["clues"])
+            scene_txt += ("\n本场景线索（DM 私信，绝不直接念出；玩家行动满足揭示条件"
+                          "才埋进描述）:\n" + clue_lines)
         if scene.get("notes_for_dm"):
             scene_txt += f"\n（给 DM 的私信，不要念给玩家）: {scene['notes_for_dm']}"
         parts.append("【当前场景】\n" + scene_txt)
+    if adv.get("npcs"):
+        npc_lines = "\n".join(
+            f"- {n['name']}：{n['personality']}；声线: {n.get('voice_hint', '无')}"
+            f"；秘密（DM 私信，按剧本节奏透露）: "
+            + "；".join(n.get("secrets", []))
+            for n in adv["npcs"])
+        parts.append("【NPC 名册】（扮演时恪守各自性格与秘密）\n" + npc_lines)
     parts.append(
         "【对话历史说明】\n开场白之前的对话历史是玩家选剧本的过程（那时你是"
         "推荐员），从现在起你已经是主持人，不要再以推荐员自居。")

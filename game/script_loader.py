@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 from pathlib import Path
 
@@ -75,7 +76,11 @@ def load_adventures(dir_path) -> dict[str, dict]:
 
 
 def find_adventure(adventures: dict[str, dict], query: str) -> dict | None:
-    """容错查找：先精确 id，再精确 title，再子串模糊匹配（id/title 互相包含）。"""
+    """容错查找：先精确 id，再精确 title，再子串模糊匹配，最后相似度匹配。
+
+    相似度兜底是为了接住 ASR 同音错字（如「庄园卫影」→「庄园魅影」）——
+    语音链路里玩家说剧本名必然经过 ASR，逐字匹配一定会被同音字打败。
+    """
     q = (query or "").strip()
     if not q:
         return None
@@ -87,4 +92,10 @@ def find_adventure(adventures: dict[str, dict], query: str) -> dict | None:
     for adv in adventures.values():
         if q in adv["id"] or q in adv["title"] or adv["title"] in q:
             return adv
-    return None
+    best, best_ratio = None, 0.0
+    for adv in adventures.values():
+        for cand in (adv["id"], adv["title"]):
+            ratio = difflib.SequenceMatcher(None, q, cand).ratio()
+            if ratio > best_ratio:
+                best, best_ratio = adv, ratio
+    return best if best_ratio >= 0.6 else None

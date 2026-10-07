@@ -59,7 +59,7 @@ class GameEngine:
         self.world_facts[key] = value
 
     def advance_scene(self, scene_id: str) -> dict:
-        scene = self._find_scene(scene_id)
+        scene = self.find_scene(scene_id)
         if scene is None:
             raise KeyError(f"场景不存在: {scene_id!r}")
         self.scene_id = scene["id"]
@@ -68,9 +68,9 @@ class GameEngine:
     def current_scene(self) -> dict | None:
         if self.adventure is None or self.scene_id is None:
             return None
-        return self._find_scene(self.scene_id)
+        return self.find_scene(self.scene_id)
 
-    def _find_scene(self, scene_id: str) -> dict | None:
+    def find_scene(self, scene_id: str) -> dict | None:
         if self.adventure is None:
             return None
         for scene in self.adventure["scenes"]:
