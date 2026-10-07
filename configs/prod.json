@@ -95,8 +95,30 @@
     "resource_id": "volc.seedasr.sauc.duration"
   },
   "volcengine": {
-    "speaker": "zh_female_vv_uranus_bigtts",
-    "resource_id": "seed-tts-2.0"
+    "speaker": "zh_male_xuanyijieshuo_uranus_bigtts",
+    "resource_id": "seed-tts-2.0",
+    "emotion_scale": 4,
+    "voices": {
+      "narrator_m": {"speaker": "zh_male_xuanyijieshuo_uranus_bigtts"},
+      "npc_female": {"speaker": "zh_female_gaolengyujie_uranus_bigtts"},
+      "npc_female_young": {"speaker": "zh_female_linjianvhai_uranus_bigtts"},
+      "npc_male_old": {"speaker": "zh_male_yuanboxiaoshu_uranus_bigtts"},
+      "npc_male_young": {"speaker": "zh_male_yangguangqingnian_uranus_bigtts"}
+    },
+    "emotions": {
+      "平静": "neutral",
+      "紧张": "tension",
+      "恐惧": "fear",
+      "愤怒": "angry",
+      "悲伤": "sad",
+      "神秘": "storytelling",
+      "激动": "excited",
+      "低语": "ASMR",
+      "恭敬": "tender",
+      "犹豫": "shy",
+      "温柔": "tender",
+      "威严": "coldness"
+    }
   },
   "game": {
     "adventures_dir": "adventures",
