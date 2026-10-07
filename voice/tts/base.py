@@ -29,6 +29,8 @@ class AudioChunk:
 _TAG_RE = re.compile(r"⟦([^⟧]*)⟧")
 _TAG_V = re.compile(r"\bv:([\w一-鿿·'-]+)")
 _TAG_E = re.compile(r"\be:([^⟧]+)")
+# 兜底剥离：完整标记 | 未闭合标记（流被截断）| 落单的 ⟧
+_TAG_STRIP_RE = re.compile(r"⟦[^⟧]*⟧|⟦[^⟧]*$|⟧")
 
 
 def _parse_tag(body: str) -> tuple[str, str | None]:
@@ -37,6 +39,13 @@ def _parse_tag(body: str) -> tuple[str, str | None]:
     voice = vm.group(1) if vm else ""
     emotion = (em.group(1).strip() or None) if em else None
     return voice, emotion
+
+
+def _emit(out: list, text: str, voice: str, emotion: str | None) -> None:
+    """片段入列前剥离残余标记（未闭合的 ⟦…、落单 ⟧），保证绝不念出。"""
+    text = _TAG_STRIP_RE.sub("", text)
+    if text.strip():
+        out.append((text, voice, emotion))
 
 
 def parse_tagged(sentence: str) -> list[tuple[str, str, str | None]]:
@@ -49,26 +58,40 @@ def parse_tagged(sentence: str) -> list[tuple[str, str, str | None]]:
     pos = 0
     try:
         for m in _TAG_RE.finditer(sentence):
-            seg = sentence[pos:m.start()]
-            if seg.strip():
-                out.append((seg, voice, emotion))
+            _emit(out, sentence[pos:m.start()], voice, emotion)
             voice, emotion = _parse_tag(m.group(1))
             pos = m.end()
-        tail = sentence[pos:]
-        if tail.strip():
-            out.append((tail, voice, emotion))
+        _emit(out, sentence[pos:], voice, emotion)
     except Exception:
-        return [(_TAG_RE.sub("", sentence), "", None)]
-    if not out:
-        cleaned = _TAG_RE.sub("", sentence)
-        if cleaned.strip():
-            out.append((cleaned, "", None))
+        return [(_TAG_STRIP_RE.sub("", sentence), "", None)]
     return out
+
+
+def parse_tagged_stateful(
+        sentence: str, voice: str = "", emotion: str | None = None
+) -> tuple[list[tuple[str, str, str | None]], str, str | None]:
+    """parse_tagged 的有状态版：标记状态从 (voice, emotion) 开始，返回结束状态。
+
+    供跨句保持声线：NPC 多句台词只在开头标一次，后续无标记句继承该声线
+    （由调用方决定何时继承，如引号未闭合）。句内先文本后标记的残缺形式
+    不影响状态提取；整条标记解析异常时该句按起始状态原样返回。
+    """
+    out: list[tuple[str, str, str | None]] = []
+    pos = 0
+    try:
+        for m in _TAG_RE.finditer(sentence):
+            _emit(out, sentence[pos:m.start()], voice, emotion)
+            voice, emotion = _parse_tag(m.group(1))
+            pos = m.end()
+        _emit(out, sentence[pos:], voice, emotion)
+    except Exception:
+        return [(_TAG_STRIP_RE.sub("", sentence), voice, emotion)], voice, emotion
+    return out, voice, emotion
 
 
 def strip_tags(sentence: str) -> str:
     """给不支持多音色的 provider 用：剥掉全部标记，只留可合成文本。"""
-    return _TAG_RE.sub("", sentence)
+    return _TAG_STRIP_RE.sub("", sentence)
 
 
 class TTS(Protocol):

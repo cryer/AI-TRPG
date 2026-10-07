@@ -3,9 +3,14 @@
 与 sherpa provider 同契约（voice/tts/base.py），可经 configs 直接互换。
 
 - 官方仓库代码经 sys.path 注入加载（`repo_path` 配置），模型懒加载。
-- 逐句合成，LLM 流式出 token + flow/hift 逐 hop 出音频（stream=True）：
+- 逐段合成，LLM 流式出 token + flow/hift 逐 hop 出音频（stream=True）：
   首音延迟 ≈ 首个 hop（25 token），而不是整句合成完。worker 线程 →
   asyncio 队列桥接，event loop 零阻塞；单 GPU 串行由 threading.Lock 保证。
+- 句间合并（_segment_stream）：相邻同 (voice, emotion) 的句子在上游已就绪时
+  合并成一个合成批次（≤MERGE_MAX_CHARS），prosody 在一次调用内连续规划，
+  句间语气/语速不跳变，RTF 也更好；非阻塞拉取，不拖慢首音。
+- 声线状态跨句保持：NPC 台词被切成多句时，只要引号「」未闭合，后续无标记
+  句继承该 NPC 声线（DM 只在台词开头标一次 ⟦v:…⟧，回旁白不标）。
 - flow matching 解码器走 onnxruntime CUDA（`use_ort_estimator`，默认开）：
   模型自带的 flow.decoder.estimator.fp32.onnx 在 WDDM/Windows 下比 torch eager
   快约 10 倍（实测 67M UNet 单次 500ms→49ms），是 6GB 级显卡实时的关键。
@@ -16,12 +21,12 @@
   开启时 LLM 权重同步转半精度（实测 55ms→19ms/token，显存占用也减半）。
   早期「autocast 拖慢 estimator」的结论只适用于 torch eager 解码路径。
 - 多音色零样本克隆：`voices` 配置声线注册表 {id: {prompt_wav, instruct}}，
-  句子可带内联标记 `⟦v:voice_id e:情绪⟧` 切换声线/语气（base.parse_tagged
+  句子可带内联标记 `⟦v:voice_id e:情绪⟧` 切换声线/语气（base.parse_tagged_stateful
   解析）；标记非法或未注册 id 一律回退 default_voice，不会念出标记。
 - (voice_id, instruct) 维度缓存前端特征（speech token/embedding/feat 提取
   只需一次），同声线换句零额外开销；情绪词动态拼 instruct 也走缓存。
-- barge-in 取消：外层 cancel 后停止入队；当前句合成在后台收尾（GPU 调用
-  不可中断），下一句合成经锁等待，不会并发抢卡。
+- barge-in 取消：外层 cancel 后停止入队，合成线程在 hop 边界检查取消标志
+  提前退出（一个 hop ~0.2-0.5s），GPU 锁快速释放给新回合；不会并发抢卡。
 """
 
 from __future__ import annotations
@@ -31,14 +36,16 @@ import audioop
 import os
 import sys
 import threading
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 import numpy as np
 
-from voice.tts.base import AudioChunk, parse_tagged
+from voice.tts.base import AudioChunk, parse_tagged_stateful
 
 CHUNK_MS = 100
 NATIVE_SR = 24000  # CosyVoice2 输出采样率
+MERGE_MAX_CHARS = 100   # 句间合并的批次字符上限
+MERGE_WAIT_S = 0.05     # 合并时等非阻塞拉取下一句的宽限
 
 
 class CosyVoiceTTS:
@@ -181,8 +188,11 @@ class CosyVoiceTTS:
     # ---------- 同步合成（worker 线程内） ----------
 
     def _synth_segment_sync(self, text: str, voice_id: str, emotion: str | None,
-                            put) -> None:
-        """合成一个带声线标记的片段，PCM16 16kHz 字节经 put() 顺流产出。"""
+                            put, should_stop: Callable[[], bool] | None = None) -> None:
+        """合成一个带声线标记的片段，PCM16 16kHz 字节经 put() 顺流产出。
+
+        should_stop 置位时在 hop 边界提前退出（barge-in 快速释放 GPU 锁）。
+        """
         model = self._model
         frontend = model.frontend
         norm = frontend.text_normalize(text, split=False)
@@ -204,6 +214,8 @@ class CosyVoiceTTS:
             rs_state = None               # ratecv 状态跨 chunk 保持，避免边界咔哒声
             for out in model.model.tts(**model_input, stream=stream,
                                        speed=self.speed):
+                if should_stop is not None and should_stop():
+                    break                 # barge-in：hop 边界退出，释放锁
                 speech = out["tts_speech"].detach().cpu().numpy().flatten()
                 speech = np.clip(speech, -1.0, 1.0)
                 pcm = (speech * 32767.0).astype(np.int16).tobytes()
@@ -214,6 +226,70 @@ class CosyVoiceTTS:
 
     # ---------- TTS 契约 ----------
 
+    async def _segment_stream(self, sentences) -> AsyncIterator[tuple[str, str, str | None]]:
+        """句流 → 合并后的 (text, voice, emotion) 合成批次流。
+
+        - 声线跨句保持：引号「」未闭合时，无标记句继承当前声线/情绪
+          （NPC 台词被分句器切成多句，DM 只在开头标一次）；引号外的
+          无标记句回到默认声线（旁白）。
+        - 同 (voice, emotion) 的相邻片段合并（≤MERGE_MAX_CHARS）：一次合成
+          调用内 prosody 连续规划，句间语气/语速不跳变，RTF 也更好。
+          下一句非阻塞拉取（MERGE_WAIT_S 宽限），上游没就绪就先合成，
+          不拖慢首音。
+        """
+        it = sentences.__aiter__()
+        cur_voice, cur_emotion = "", None
+        quote_depth = 0
+        buf: list[str] = []
+        buf_key = ("", None)
+        upstream_end = False
+        pending: asyncio.Task | None = None
+
+        async def pull(block: bool) -> str | None:
+            # 不用 wait_for(anext)：超时取消会毁掉异步生成器（丢句）。
+            # 改为挂起 task，超时不取消、下次接着等同一个。
+            nonlocal upstream_end, pending
+            if upstream_end:
+                return None
+            if pending is None:
+                pending = asyncio.ensure_future(it.__anext__())
+            if not block:
+                done, _ = await asyncio.wait({pending}, timeout=MERGE_WAIT_S)
+                if not done:
+                    return None
+            try:
+                raw = await pending
+            except StopAsyncIteration:
+                upstream_end = True
+                raw = None
+            pending = None
+            return raw
+
+        while True:
+            raw = await pull(block=not buf)
+            if raw is None:
+                if buf:
+                    yield "".join(buf), buf_key[0], buf_key[1]
+                    buf = []
+                if upstream_end:
+                    return
+                continue
+            inherit = quote_depth > 0
+            start = (cur_voice, cur_emotion) if inherit else ("", None)
+            segs, cur_voice, cur_emotion = parse_tagged_stateful(raw, *start)
+            quote_depth = max(0, quote_depth + raw.count("「") - raw.count("」"))
+            for text, v, e in segs:
+                key = (v, e)
+                if buf and key != buf_key:
+                    yield "".join(buf), buf_key[0], buf_key[1]
+                    buf = []
+                if not buf:
+                    buf_key = key
+                buf.append(text)
+                if sum(len(t) for t in buf) >= MERGE_MAX_CHARS:
+                    yield "".join(buf), buf_key[0], buf_key[1]
+                    buf = []
+
     async def synth(self, sentences, gen_id: int) -> AsyncIterator[AudioChunk]:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._load_sync)
@@ -222,7 +298,7 @@ class CosyVoiceTTS:
             return
         seq = 0
         chunk_bytes = self.sample_rate * 2 * CHUNK_MS // 1000
-        async for sentence in sentences:
+        async for text, voice_id, emotion in self._segment_stream(sentences):
             q: asyncio.Queue = asyncio.Queue()
             cancelled = False
 
@@ -232,10 +308,8 @@ class CosyVoiceTTS:
 
             def run():
                 try:
-                    for text, voice_id, emotion in parse_tagged(sentence):
-                        if cancelled:      # barge-in：丢弃本句剩余片段
-                            break
-                        self._synth_segment_sync(text, voice_id, emotion, put)
+                    self._synth_segment_sync(text, voice_id, emotion, put,
+                                             should_stop=lambda: cancelled)
                 except Exception as e:
                     loop.call_soon_threadsafe(q.put_nowait, e)
                 finally:
@@ -250,8 +324,8 @@ class CosyVoiceTTS:
                         break
                     if isinstance(item, Exception):
                         # 单句失败不能炸掉整个回合（同 sherpa 策略）
-                        print(f"[warn] CosyVoice2 合成失败，跳过该句 "
-                              f"{sentence[:20]!r}: {item!r}")
+                        print(f"[warn] CosyVoice2 合成失败，跳过该段 "
+                              f"{text[:20]!r}: {item!r}")
                         break
                     buf += item
                     while len(buf) >= chunk_bytes:
