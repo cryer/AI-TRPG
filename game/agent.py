@@ -60,8 +60,7 @@ _DM_BASE_RULES = (
     "角色配音：系统会给不同角色配不同声线。NPC 开口说话时，在他的台词开头"
     "紧挨着写 ⟦s:NPC名字 e:情绪⟧（名字严格用名册里的名字，标记后不换行直接跟台词），"
     "你自己的叙述、旁白和玩家相关描述一律不加任何标记；台词说完回到旁白也不用标记。"
-    "情绪从以下词里选最贴合当前语境的一个：平静、紧张、恐惧、愤怒、悲伤、"
-    "神秘、激动、低语、恭敬、犹豫、温柔、威严。不要编造名册之外的 NPC。"
+    "情绪从以下词里选最贴合当前语境的一个：{emotions}。不要编造名册之外的 NPC。"
     "情绪要连贯：同一个 NPC 在连续几句台词里沿用同一个情绪词，"
     "只有剧情明显转折才换，不要每句都换。标记只写 ⟦s:名字 e:情绪⟧ 这一种形式，"
     "不要写 ⟦v:...⟧ 或其他变体。"
@@ -69,18 +68,26 @@ _DM_BASE_RULES = (
     "不超过五六句话（开场白和结局可以稍长）；不要使用 Markdown、列表、表情符号。"
 )
 
+# 默认情绪词表；configs/trpg.json 的 cosyvoice.emotions 会覆盖它
+# （那里是单一事实来源，TTS warmup 也按它预建模板）
+_DEFAULT_EMOTIONS = ["平静", "紧张", "恐惧", "愤怒", "悲伤", "神秘",
+                     "激动", "低语", "恭敬", "犹豫", "温柔", "威严"]
 
-def dm_prompt(engine: GameEngine, memory: ConversationMemory | None = None) -> str:
+
+def dm_prompt(engine: GameEngine, memory: ConversationMemory | None = None,
+              emotions: list | None = None) -> str:
     """DM system prompt 动态拼装（每轮重建）。
 
     结构（AGENTS.md §4.3）：基础规则 + 剧本片段 + 世界状态（结构化事实，
     永不淘汰）+ 滚动摘要（滑窗外的早期剧情）+ 当前场景 + NPC 名册。
     最近 N 轮原文由 respond 里的滑窗注入，不进 system prompt。
     """
+    base_rules = _DM_BASE_RULES.format(
+        emotions="、".join(emotions or _DEFAULT_EMOTIONS))
     adv = engine.adventure
     scene = engine.current_scene()
     parts = [
-        "【基础 DM 规则】\n" + _DM_BASE_RULES,
+        "【基础 DM 规则】\n" + base_rules,
         "【主持人设】\n" + adv["dm_persona"],
         "【玩家角色背景】（玩家已知此背景，不用再念给他听）\n"
         + adv["player_background"],
@@ -165,6 +172,8 @@ class GameAgent:
             self.history,
             window_turns=game_cfg.get("window_turns", 18),
             summary_interval_turns=game_cfg.get("summary_interval_turns", 15))
+        # 情绪词表：与 TTS warmup 共用 configs 里的单一事实来源
+        self.emotions = cfg.get("cosyvoice", {}).get("emotions")
         self._narration_hook = lambda on: None   # bind 后接 TurnManager
         self.engine.on_session_reset = self._on_session_reset
 
@@ -188,7 +197,7 @@ class GameAgent:
                 prompt += ("\n【上一局回顾】" + self.engine.session_note +
                            "可以自然地提一句（比如他上局的表现），但不要展开细节。")
             return prompt
-        return dm_prompt(self.engine, self.memory)
+        return dm_prompt(self.engine, self.memory, self.emotions)
 
     # ---------- 多音色标记改写（⟦s:NPC名 e:情绪⟧ → ⟦v:声线id e:情绪⟧） ----------
 

@@ -37,13 +37,19 @@
     "speed": 1.1
   },
   "cosyvoice": {
+    "_readme": "本地 TTS 调优指南（参数/声线/情绪怎么改）见 docs/local-tts.md",
     "repo_path": "vendor/CosyVoice",
     "model_dir": "./models/CosyVoice2-0.5B",
     "default_voice": "narrator_m",
     "fp16": true,
     "use_ort_estimator": true,
-    "nfe": 5,
+    "nfe": 3,
     "cudnn_benchmark": false,
+    "speed": 1.0,
+    "merge_max_chars": 150,
+    "merge_wait_s": 0.05,
+    "emotions": ["平静", "紧张", "恐惧", "愤怒", "悲伤", "神秘",
+                 "激动", "低语", "恭敬", "犹豫", "温柔", "威严"],
     "voices": {
       "narrator_m": {
         "prompt_wav": "./models/voices/narrator_m.wav",

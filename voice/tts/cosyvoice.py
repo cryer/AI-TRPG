@@ -69,6 +69,8 @@ class CosyVoiceTTS:
                  load_jit: bool = False,
                  cudnn_benchmark: bool = False,
                  emotions: list | None = None,
+                 merge_max_chars: int = 150,
+                 merge_wait_s: float = 0.05,
                  sample_rate: int = 16000):
         self.repo_path = repo_path
         self.model_dir = model_dir
@@ -79,7 +81,8 @@ class CosyVoiceTTS:
         self.fp16 = fp16
         self.use_ort_estimator = use_ort_estimator
         # flow matching 欧拉步数（官方默认 10）。解码器是唯一瓶颈，
-        # 步数线性省时间；RTF>1 的中低端卡可降到 5~6 换流畅度
+        # 步数线性省时间、音质线性下降；中低端卡降到 3~5 换流畅度，
+        # 高端卡（4090）可回 6~10 换音质。调优指南见 docs/local-tts.md
         self.nfe = nfe
         # flow encoder 是否用官方 JIT 版（flow.encoder.fp16.zip）。
         # 实测 RTX 3050/WDDM 上 JIT 版反而慢一倍多（RTF 1.1→2.1），默认关
@@ -89,6 +92,9 @@ class CosyVoiceTTS:
         self.cudnn_benchmark = cudnn_benchmark
         # warmup 预建模板的情绪词表（见 DEFAULT_EMOTIONS）
         self.emotions = emotions or DEFAULT_EMOTIONS
+        # 句间合并上限/宽限（见 _segment_stream）；调小首音更快但句间语气更易跳变
+        self.merge_max_chars = merge_max_chars
+        self.merge_wait_s = merge_wait_s
         self.sample_rate = sample_rate
         self._model = None
         self._lock = threading.Lock()       # GPU 串行
@@ -318,7 +324,7 @@ class CosyVoiceTTS:
             if pending is None:
                 pending = asyncio.ensure_future(it.__anext__())
             if not block:
-                done, _ = await asyncio.wait({pending}, timeout=MERGE_WAIT_S)
+                done, _ = await asyncio.wait({pending}, timeout=self.merge_wait_s)
                 if not done:
                     return None
             try:
@@ -350,7 +356,7 @@ class CosyVoiceTTS:
                 if not buf:
                     buf_key = key
                 buf.append(text)
-                if sum(len(t) for t in buf) >= MERGE_MAX_CHARS:
+                if sum(len(t) for t in buf) >= self.merge_max_chars:
                     yield "".join(buf), buf_key[0], buf_key[1]
                     buf = []
 
