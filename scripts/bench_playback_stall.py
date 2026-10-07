@@ -45,7 +45,7 @@ def simulate(arrivals, offset):
 
 async def main(nfe: int):
     tts = CosyVoiceTTS(
-        repo_path=r"vendor/CosyVoice",
+        repo_path=str(ROOT / "vendor" / "CosyVoice"),
         model_dir=str(ROOT / "models" / "CosyVoice2-0.5B"),
         voices={
             "narrator_m": {"prompt_wav": str(ROOT / "models" / "voices" / "narrator_m.wav"),

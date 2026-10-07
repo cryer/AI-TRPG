@@ -62,7 +62,7 @@ def _make_vad(cfg: dict) -> SileroVAD:
 # 当前活动实例 → 切换下一回合即生效，通话不中断。provider 实例池化，
 # 本地模型首次切换时懒加载 + 预热（避免开机就加载两套栈）。
 
-CHOICES = {"asr": ("volcengine", "sherpa"), "tts": ("volcengine", "sherpa")}
+CHOICES = {"asr": ("volcengine", "sherpa"), "tts": ("volcengine", "sherpa", "cosyvoice")}
 
 
 def _create_provider(cfg: dict, slot: str, name: str):
