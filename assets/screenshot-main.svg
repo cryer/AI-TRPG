@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="900" viewBox="0 0 760 900">
+  <!-- 占位图：UI 示意图（正式截图后请替换为 assets/ui-main.png 等小体积图片） -->
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="75%">
+      <stop offset="0%" stop-color="#131722"/>
+      <stop offset="55%" stop-color="#0b0e16"/>
+      <stop offset="100%" stop-color="#060810"/>
+    </radialGradient>
+    <radialGradient id="top-glow" cx="50%" cy="0%" r="60%">
+      <stop offset="0%" stop-color="#40345a" stop-opacity=".55"/>
+      <stop offset="100%" stop-color="#40345a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e0b45c"/>
+      <stop offset="100%" stop-color="#c9a86a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="760" height="900" fill="url(#bg)"/>
+  <rect width="760" height="900" fill="url(#top-glow)"/>
+
+  <!-- 标题 -->
+  <text x="380" y="92" text-anchor="middle" font-family="KaiTi, STKaiti, serif"
+        font-size="44" letter-spacing="14" fill="#e6d5ac">夜 话 跑 团</text>
+  <text x="380" y="126" text-anchor="middle" font-family="sans-serif"
+        font-size="15" letter-spacing="6" fill="#d8cdb4" opacity=".5">AI 主持人 · 单人语音跑团</text>
+  <line x1="285" y1="152" x2="475" y2="152" stroke="#c9a86a" stroke-width="1" opacity=".65"/>
+  <rect x="376" y="148" width="8" height="8" transform="rotate(45 380 152)" fill="#c9a86a"/>
+
+  <!-- 法阵 -->
+  <g opacity=".5">
+    <circle cx="380" cy="430" r="180" fill="none" stroke="#c9a86a" stroke-opacity=".35"
+            stroke-width="1.5" stroke-dasharray="4 7"/>
+    <circle cx="380" cy="430" r="158" fill="none" stroke="#7b8cde" stroke-opacity=".22"
+            stroke-width="1.2" stroke-dasharray="2 6"/>
+    <polygon points="380,270 520,510 240,510" fill="none" stroke="#c9a86a" stroke-opacity=".18"/>
+    <polygon points="380,590 240,350 520,350" fill="none" stroke="#7b8cde" stroke-opacity=".14"/>
+  </g>
+
+  <!-- 声波环（示意） -->
+  <g stroke-linecap="round" stroke-width="6" opacity=".85">
+    <g stroke="#e0b45c">
+      <line x1="380" y1="262" x2="380" y2="238"/>
+      <line x1="512" y1="322" x2="528" y2="310"/>
+      <line x1="542" y1="430" x2="568" y2="430"/>
+      <line x1="512" y1="538" x2="528" y2="550"/>
+      <line x1="248" y1="322" x2="232" y2="310"/>
+    </g>
+    <g stroke="#7b8cde">
+      <line x1="218" y1="430" x2="192" y2="430"/>
+      <line x1="248" y1="538" x2="232" y2="550"/>
+      <line x1="380" y1="598" x2="380" y2="622"/>
+      <line x1="452" y1="280" x2="462" y2="264"/>
+      <line x1="308" y1="280" x2="298" y2="264"/>
+    </g>
+  </g>
+
+  <!-- 中央按钮 -->
+  <circle cx="380" cy="430" r="62" fill="#141824" stroke="#c9a86a" stroke-opacity=".55" stroke-width="1.5"/>
+  <circle cx="380" cy="430" r="62" fill="none" stroke="#e0b45c" stroke-opacity=".25" stroke-width="10"/>
+  <g transform="translate(380,424) scale(1.9)" stroke="#e0b45c" fill="none"
+     stroke-width="1.1" stroke-linejoin="round">
+    <path d="M0 -10 L8 -5.5 V5.5 L0 10 L-8 5.5 V-5.5 Z"/>
+    <path d="M0 10 V0 M0 0 L-8 -5.5 M0 0 L8 -5.5"/>
+  </g>
+  <text x="380" y="478" text-anchor="middle" font-family="KaiTi, serif"
+        font-size="11" letter-spacing="3" fill="#e0b45c" opacity=".85">开 启</text>
+
+  <!-- 状态判词 -->
+  <text x="380" y="700" text-anchor="middle" font-family="KaiTi, STKaiti, serif"
+        font-size="19" letter-spacing="5" fill="#e6d5ac" opacity=".8">轮到你了——说出你的行动</text>
+
+  <!-- 右上切换开关 -->
+  <g>
+    <rect x="560" y="26" width="176" height="34" rx="17" fill="#0e111a" fill-opacity=".8"
+          stroke="#c9a86a" stroke-opacity=".28"/>
+    <text x="584" y="48" font-family="KaiTi, serif" font-size="13" fill="#d8cdb4" opacity=".6">识别</text>
+    <rect x="612" y="31" width="58" height="24" rx="12" fill="url(#gold)"/>
+    <text x="641" y="48" text-anchor="middle" font-size="12" fill="#141824" font-weight="bold">本地</text>
+    <text x="702" y="48" text-anchor="middle" font-size="12" fill="#d8cdb4" opacity=".5">云端</text>
+    <rect x="560" y="70" width="176" height="34" rx="17" fill="#0e111a" fill-opacity=".8"
+          stroke="#c9a86a" stroke-opacity=".28"/>
+    <text x="584" y="92" font-family="KaiTi, serif" font-size="13" fill="#d8cdb4" opacity=".6">合成</text>
+    <rect x="612" y="75" width="58" height="24" rx="12" fill="url(#gold)"/>
+    <text x="641" y="92" text-anchor="middle" font-size="12" fill="#141824" font-weight="bold">本地</text>
+    <text x="702" y="92" text-anchor="middle" font-size="12" fill="#d8cdb4" opacity=".5">云端</text>
+  </g>
+
+  <!-- 余烬 -->
+  <g fill="#e0b45c">
+    <circle cx="120" cy="780" r="3" opacity=".5"/>
+    <circle cx="640" cy="740" r="2.5" opacity=".4"/>
+    <circle cx="200" cy="860" r="2" opacity=".3"/>
+    <circle cx="580" cy="850" r="3" opacity=".35"/>
+    <circle cx="80" cy="700" r="2" opacity=".3"/>
+  </g>
+
+  <text x="380" y="876" text-anchor="middle" font-family="sans-serif"
+        font-size="12" letter-spacing="6" fill="#d8cdb4" opacity=".28">自由行动 · 随时打断 · 你的选择决定结局</text>
+</svg>

@@ -1,0 +1,7 @@
+# 纯云端部署的最小依赖（ASR/TTS 都走 API，不需要 GPU 和本地大模型）。
+# 本地 VAD（语音活动检测）仍在端侧跑，所以保留 numpy + onnxruntime（CPU 版即可）。
+numpy==1.26.4
+onnxruntime==1.17.1
+websockets==16.1
+aiohttp==3.14.3
+python-dotenv==1.1.0

@@ -220,9 +220,9 @@ def main(argv=None) -> int:
     ap.add_argument("--ssl-cert", default="certs/cert.pem")
     ap.add_argument("--ssl-key", default="certs/key.pem")
     ap.add_argument("--out", default="reports")
-    ap.add_argument("--asr", help="覆盖 config 的 ASR provider（sherpa=本地）")
+    ap.add_argument("--asr", help="覆盖 config 的 ASR provider（sherpa=本地，volcengine/deepgram=云端）")
     ap.add_argument("--llm", help="覆盖 config 的 LLM provider")
-    ap.add_argument("--tts", help="覆盖 config 的 TTS provider（sherpa=本地）")
+    ap.add_argument("--tts", help="覆盖 config 的 TTS provider（cosyvoice/sherpa=本地，volcengine=云端）")
     args = ap.parse_args(argv)
 
     with open(args.config, encoding="utf-8") as fh:
