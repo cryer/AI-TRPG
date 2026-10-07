@@ -114,6 +114,23 @@ async def main():
           detail=str(segs5))
     check("开头旁白是默认声线", segs5[0][1] == "", detail=str(segs5))
 
+    # 真人局实锤场景（web_20261007_182521 turn 4）：LLM 用弯引号“”而非「」，
+
+    # 多句台词必须同样全程保持 NPC 声线
+    segs6 = await segments_of([
+        "⟦v:npc_male_old e:低语⟧“老爷是昨夜十点四十走的，就在书房里。",
+        "门从里头锁着，窗户也插得好好的。",
+        "庄里人都说……是夫人回来索命了。”",
+        "他顿了顿，朝走廊深处抬了抬下巴。",
+    ])
+    npc6 = [t for t, v, e in segs6 if v == "npc_male_old"]
+    check("弯引号台词全程 NPC 声线", bool(npc6) and
+          all(k in "".join(npc6) for k in ("十点四十", "窗户", "索命")),
+          detail=str(segs6))
+    check("弯引号闭合后旁白回默认", segs6[-1][1] == "" and
+          "抬了抬下巴" in segs6[-1][0], detail=str(segs6))
+    check("弯引号情绪随标记携带", any(e == "低语" for t, v, e in segs6))
+
     print("== 4. _resolve_voice：声线 id 容错 ==")
     tts2 = CosyVoiceTTS(voices={v: {"prompt_wav": "x", "instruct": ""} for v in
                                 ("narrator_m", "npc_female", "npc_female_young",

@@ -9,8 +9,8 @@
 - 句间合并（_segment_stream）：相邻同 (voice, emotion) 的句子在上游已就绪时
   合并成一个合成批次（≤MERGE_MAX_CHARS），prosody 在一次调用内连续规划，
   句间语气/语速不跳变，RTF 也更好；非阻塞拉取，不拖慢首音。
-- 声线状态跨句保持：NPC 台词被切成多句时，只要引号「」未闭合，后续无标记
-  句继承该 NPC 声线（DM 只在台词开头标一次 ⟦v:…⟧，回旁白不标）。
+- 声线状态跨句保持：NPC 台词被切成多句时，只要引号（「」/“”等）未闭合，
+  后续无标记句继承该 NPC 声线（DM 只在台词开头标一次 ⟦v:…⟧，回旁白不标）。
 - flow matching 解码器走 onnxruntime CUDA（`use_ort_estimator`，默认开）：
   模型自带的 flow.decoder.estimator.fp32.onnx 在 WDDM/Windows 下比 torch eager
   快约 10 倍（实测 67M UNet 单次 500ms→49ms），是 6GB 级显卡实时的关键。
@@ -57,6 +57,16 @@ MERGE_WAIT_S = 0.05     # 合并时等非阻塞拉取下一句的宽限
 # 对局中换情绪只做廉价组装；词表与 DM prompt 保持一致。
 DEFAULT_EMOTIONS = ["平静", "紧张", "恐惧", "愤怒", "悲伤", "神秘",
                     "激动", "低语", "恭敬", "犹豫", "温柔", "威严"]
+
+# NPC 台词的引号形式：LLM 实际会混用「」和“”（真人局实锤），
+# 跨句声线继承按所有形式的开合计数
+_QUOTE_OPEN = "「『“"
+_QUOTE_CLOSE = "」』”"
+
+
+def _quote_delta(s: str) -> int:
+    return (sum(s.count(c) for c in _QUOTE_OPEN)
+            - sum(s.count(c) for c in _QUOTE_CLOSE))
 
 
 class CosyVoiceTTS:
@@ -299,9 +309,9 @@ class CosyVoiceTTS:
     async def _segment_stream(self, sentences) -> AsyncIterator[tuple[str, str, str | None]]:
         """句流 → 合并后的 (text, voice, emotion) 合成批次流。
 
-        - 声线跨句保持：引号「」未闭合时，无标记句继承当前声线/情绪
-          （NPC 台词被分句器切成多句，DM 只在开头标一次）；引号外的
-          无标记句回到默认声线（旁白）。
+        - 声线跨句保持：引号（「」/『』/“”）未闭合时，无标记句继承当前
+          声线/情绪（NPC 台词被分句器切成多句，DM 只在开头标一次）；
+          引号外的无标记句回到默认声线（旁白）。
         - 同 (voice, emotion) 的相邻片段合并（≤MERGE_MAX_CHARS）：一次合成
           调用内 prosody 连续规划，句间语气/语速不跳变，RTF 也更好。
           下一句非阻塞拉取（MERGE_WAIT_S 宽限），上游没就绪就先合成，
@@ -347,7 +357,7 @@ class CosyVoiceTTS:
             inherit = quote_depth > 0
             start = (cur_voice, cur_emotion) if inherit else ("", None)
             segs, cur_voice, cur_emotion = parse_tagged_stateful(raw, *start)
-            quote_depth = max(0, quote_depth + raw.count("「") - raw.count("」"))
+            quote_depth = max(0, quote_depth + _quote_delta(raw))
             for text, v, e in segs:
                 key = (v, e)
                 if buf and key != buf_key:
