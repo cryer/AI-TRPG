@@ -254,6 +254,7 @@ class TurnManager:
 
     async def _do_barge_in(self) -> None:
         self._candidate = False
+        was_narration = self._narration
         self._narration = False
         now = time.monotonic()
         interrupted_gen = self._gen
@@ -267,9 +268,10 @@ class TurnManager:
             self.sink.barge_in(self.turn_id, interrupted_gen, int(now * 1000),
                                cancelled={"llm": True, "tts": True,
                                           "playback_flushed": True},
-                               mute_ms=mute_ms)
+                               mute_ms=mute_ms, narration=was_narration)
+        seg = "叙述段" if was_narration else "等待段"
         print(f"[barge-in] turn {self.turn_id} gen {interrupted_gen} 作废，开始聆听"
-              f"（开口→静音 {mute_ms}ms）")
+              f"（{seg}，开口→静音 {mute_ms}ms）")
         if self._pipeline_task is not None and not self._pipeline_task.done():
             self._pipeline_interrupted = True
             self._pipeline_task.cancel()

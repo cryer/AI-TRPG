@@ -165,9 +165,25 @@ def render_report(turns: list[dict], barge_ins: list[dict], budget: dict) -> str
     st = _stats(mute_vals)
     if st:
         # 口径：用户真实开口（VAD 回推起点，含 ~96ms VAD 确认）→ player.flush()
-        ok = "OK" if st["p95"] <= 400 else "OVER p95>400"
-        lines.append(f"barge-in 开口→静音: p50={st['p50']:.0f}ms p95={st['p95']:.0f}ms"
-                     f"（验收窗 200–400ms）{ok}")
+        # TRPG 非对称打断（项目 AGENTS.md §5）：叙述段阈值 500ms，等待段 200ms，
+        # 事件带 narration 标记时分组统计，各按自己的验收窗判定。
+        narr = [b["mute_ms"] for b in barge_ins
+                if b.get("narration") and isinstance(b.get("mute_ms"), (int, float))]
+        wait = [b["mute_ms"] for b in barge_ins
+                if not b.get("narration") and isinstance(b.get("mute_ms"), (int, float))]
+        has_marks = any("narration" in b for b in barge_ins)
+        if has_marks and narr and wait:
+            for label, vals, win in (("叙述段", narr, 700), ("等待段", wait, 400)):
+                g = _stats(vals)
+                if g:
+                    ok = "OK" if g["p95"] <= win else f"OVER p95>{win}"
+                    lines.append(f"barge-in 开口→静音（{label}）: n={len(vals)} "
+                                 f"p50={g['p50']:.0f}ms p95={g['p95']:.0f}ms"
+                                 f"（验收窗 ≤{win}ms）{ok}")
+        else:
+            ok = "OK" if st["p95"] <= 400 else "OVER p95>400"
+            lines.append(f"barge-in 开口→静音: p50={st['p50']:.0f}ms p95={st['p95']:.0f}ms"
+                         f"（验收窗 200–400ms）{ok}")
     lines.append("")
     header = f"{'segment':<20}{'budget':>8}{'p50':>9}{'p95':>9}{'p99':>9}{'mean':>9}  status"
     lines.append(header)
