@@ -46,8 +46,9 @@
     "nfe": 10,
     "cudnn_benchmark": false,
     "speed": 1.0,
-    "merge_max_chars": 150,
+    "merge_max_chars": 250,
     "merge_wait_s": 0.05,
+    "sample_top_p": 0.7,
     "emotions": [
       "平静",
       "紧张",

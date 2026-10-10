@@ -66,6 +66,8 @@ class VolcengineTTS:
         self.emotion_scale = emotion_scale
         self.merge_max_chars = merge_max_chars
         self.merge_wait_s = merge_wait_s
+        # 旁白氛围情绪（跨回合延续，见 tags.segment_stream 的 state）
+        self._narrator_state: dict = {}
         self._session: aiohttp.ClientSession | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -110,7 +112,9 @@ class VolcengineTTS:
         session = await self._get_session()
         seq = 0
         async for text, voice_id, emotion in segment_stream(
-                sentences, self.merge_max_chars, self.merge_wait_s):
+                sentences, self.merge_max_chars, self.merge_wait_s,
+                narrator_voice="narrator_m" if "narrator_m" in self.voices else "",
+                state=self._narrator_state):
             if not text.strip():
                 continue
             body = self._build_body(text, voice_id, emotion)

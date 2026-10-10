@@ -49,7 +49,6 @@
 from __future__ import annotations
 
 import asyncio
-import audioop
 import os
 import sys
 import threading
@@ -88,6 +87,7 @@ class CosyVoiceTTS:
                  emotions: list | None = None,
                  merge_max_chars: int = 150,
                  merge_wait_s: float = 0.05,
+                 sample_top_p: float | None = None,
                  cuda_visible_devices: str | None = None,
                  sample_rate: int = 16000):
         # 多卡服务器选卡（如 "6"）：必须在首次 CUDA 初始化前设置。
@@ -117,6 +117,11 @@ class CosyVoiceTTS:
         # 句间合并上限/宽限（见 _segment_stream）；调小首音更快但句间语气更易跳变
         self.merge_max_chars = merge_max_chars
         self.merge_wait_s = merge_wait_s
+        # LM 采样 top_p 覆盖（yaml 默认 0.8）。调低可减少逐批次独立采样带来的
+        # 旁白语气/音色漂移；None 保持官方默认
+        self.sample_top_p = sample_top_p
+        # 旁白氛围情绪（跨回合延续，见 tags.segment_stream 的 state）
+        self._narrator_state: dict = {}
         self.sample_rate = sample_rate
         self._model = None
         self._lock = threading.Lock()       # GPU 串行
@@ -219,12 +224,15 @@ class CosyVoiceTTS:
         # (a) 采样加固：llm.sampling 是 cosyvoice2.yaml !name 注入的普通函数
         # （ras_sampling），实例属性遮蔽即可，与 import 绑定方式无关
         orig_sampling = inner.llm.sampling
+        top_p_override = self.sample_top_p
 
         def safe_sampling(weighted_scores, decoded_tokens, sampling, **kw):
             if not torch.isfinite(weighted_scores).all():
                 weighted_scores = torch.nan_to_num(
                     weighted_scores, nan=-float("inf"),
                     posinf=1e4, neginf=-float("inf"))
+            if top_p_override is not None:
+                kw["top_p"] = top_p_override
             try:
                 return orig_sampling(weighted_scores, decoded_tokens, sampling, **kw)
             except RuntimeError:
@@ -383,6 +391,8 @@ class CosyVoiceTTS:
         """
         model = self._model
         frontend = model.frontend
+        import audioop  # 局部导入：Python 3.13 移除该 stdlib 模块，
+        # 让标记分段等无 GPU 功能在 3.13 下仍可 import 本模块
         norm = frontend.text_normalize(text, split=False)
         if isinstance(norm, list):      # split=False 也应返回 str，防御
             norm = "".join(norm)
@@ -420,14 +430,18 @@ class CosyVoiceTTS:
 
     # ---------- TTS 契约 ----------
 
-    def _segment_stream(self, sentences) -> AsyncIterator[tuple[str, str, str | None]]:
+    def _segment_stream(self, sentences,
+                        state: dict | None = None) -> AsyncIterator[tuple[str, str, str | None]]:
         """句流 → 合并后的 (text, voice, emotion) 合成批次流。
 
         引号感知声线状态机与相邻同 key 合并的实现已抽到
         voice/tts/tags.py 的 segment_stream（volcengine provider 共用），
-        规则详见该函数 docstring。
+        规则详见该函数 docstring。旁白氛围情绪经 self._narrator_state
+        跨回合延续；测试可传 state 隔离。
         """
-        return segment_stream(sentences, self.merge_max_chars, self.merge_wait_s)
+        return segment_stream(sentences, self.merge_max_chars, self.merge_wait_s,
+                              narrator_voice=self.default_voice,
+                              state=self._narrator_state if state is None else state)
 
     async def synth(self, sentences, gen_id: int) -> AsyncIterator[AudioChunk]:
         loop = asyncio.get_running_loop()

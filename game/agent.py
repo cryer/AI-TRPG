@@ -66,11 +66,16 @@ _DM_BASE_RULES = (
     "直接接住玩家的新意图继续（比如「好，你停在门口——你贴上门板仔细听……」）。"
     "角色配音：系统会给不同角色配不同声线。NPC 开口说话时，在他的台词开头"
     "紧挨着写 ⟦s:NPC名字 e:情绪⟧（名字严格用名册里的名字，标记后不换行直接跟台词），"
-    "你自己的叙述、旁白和玩家相关描述一律不加任何标记；台词说完回到旁白也不用标记。"
+    "台词必须用引号完整包住（「」或“”），说完及时合上引号；台词中间插了叙述、"
+    "NPC 接着再说时，新引号里的台词不用重复标记。"
     "情绪从以下词里选最贴合当前语境的一个：{emotions}。不要编造名册之外的 NPC。"
     "情绪要连贯：同一个 NPC 在连续几句台词里沿用同一个情绪词，"
     "只有剧情明显转折才换，不要每句都换。标记只写 ⟦s:名字 e:情绪⟧ 这一种形式，"
     "不要写 ⟦v:...⟧ 或其他变体。"
+    "旁白情绪：你的叙述旁白默认不写任何标记，会自动沿用当前的叙述氛围；"
+    "只有当剧情氛围明显转变时（如发现尸体、危机降临、真相揭晓、转危为安），"
+    "才在旁白段落开头写 ⟦s:旁白 e:情绪⟧ 切换氛围；同一氛围内不要每段都换，"
+    "氛围恢复平常时用 ⟦s:旁白 e:平静⟧ 收回来。"
     "语音约束：你的所有回复都会被语音合成朗读出来。口语化叙述，单次回复"
     "不超过五六句话（开场白和结局可以稍长）；不要使用 Markdown、列表、表情符号。"
 )
@@ -167,6 +172,10 @@ def _npc_aliases(full_name: str) -> set[str]:
     return aliases
 
 
+# ⟦s:旁白 e:情绪⟧ 的名字别名：映射到旁白声线（DM 规则约定旁白氛围切换标记）
+_NARRATOR_ALIASES = {"旁白", "叙述", "旁白者", "解说", "narrator"}
+
+
 class GameAgent:
     def __init__(self, cfg: dict, llm):
         game_cfg = cfg.get("game", {})
@@ -182,6 +191,9 @@ class GameAgent:
             summary_interval_turns=game_cfg.get("summary_interval_turns", 15))
         # 情绪词表：与 TTS warmup 共用 configs 里的单一事实来源
         self.emotions = cfg.get("cosyvoice", {}).get("emotions")
+        # 旁白声线 id：⟦s:旁白 e:情绪⟧ 改写成它（剧本 narrator_voice 优先）
+        self._cfg_narrator_voice = cfg.get("cosyvoice", {}).get(
+            "default_voice", "narrator_m")
         self._narration_hook = lambda on: None   # bind 后接 TurnManager
         self.engine.on_session_reset = self._on_session_reset
 
@@ -231,7 +243,13 @@ class GameAgent:
         sm = _TAG_S.search(body)
         if not sm:
             return ""                      # 无法识别的标记：剥掉，防念出
-        voice = self._npc_voice(sm.group(1).strip())
+        name = sm.group(1).strip()
+        if name in _NARRATOR_ALIASES:
+            # 旁白氛围标记 → 旁白声线（剧本 narrator_voice 优先于全局默认）
+            adv = self.engine.adventure
+            voice = (adv or {}).get("narrator_voice") or self._cfg_narrator_voice
+            return f"⟦v:{voice}{emotion}⟧"
+        voice = self._npc_voice(name)
         return f"⟦v:{voice}{emotion}⟧" if voice else ""
 
     async def _voice_rewrite(self, stream) -> AsyncIterator:

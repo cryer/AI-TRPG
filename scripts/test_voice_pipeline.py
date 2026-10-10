@@ -56,13 +56,17 @@ async def main():
 
     print("== 3. _segment_stream：跨句声线 + 合并 ==")
     tts = CosyVoiceTTS()
-    async def segments_of(sentences: list[str], trickle: bool = False):
+
+    async def segments_of(sentences: list[str], trickle: bool = False,
+                          tts_inst=None, state=None):
+        inst = tts_inst or tts
+
         async def gen():
             for s in sentences:
                 yield s
                 if trickle:
                     await asyncio.sleep(0.2)   # 上游没就绪 → 不合并
-        return [seg async for seg in tts._segment_stream(gen())]
+        return [seg async for seg in inst._segment_stream(gen(), state=state)]
 
     # 用户实锤场景：NPC 两句台词（引号跨句）→ 两句都应是 npc 声线
     segs = await segments_of([
@@ -154,6 +158,62 @@ async def main():
     ])
     check("标记切换优先于继承", [v for _, v, _ in segs8] ==
           ["npc_male_old", "npc_female"], detail=str(segs8))
+
+    print("== 3b. 直引号台词 / 声线泄漏防护 / 旁白情绪记忆 ==")
+    tts_n = CosyVoiceTTS(default_voice="narrator_m")
+
+    # 服务器实锤（web turn 12）：LLM 用直引号 "…" 写台词，旧状态机不认 →
+    # 标记声线经 explicit 泄漏，整段旁白变 NPC 音色
+    segs9 = await segments_of([
+        '⟦v:npc_female e:平静⟧"镖师不当心自己的镖，',
+        '倒有闲心来管别人的酒。"',
+        "她这才抬眼看你，一双眼又黑又亮。",
+    ], tts_inst=tts_n, state={})
+    npc9 = [t for t, v, e in segs9 if v == "npc_female"]
+    check("直引号台词全程 NPC 声线", bool(npc9) and
+          all(k in "".join(npc9) for k in ("镖师", "闲心")), detail=str(segs9))
+    check("直引号闭合后旁白回默认", segs9[-1][1] == "" and
+          "抬眼看你" in segs9[-1][0], detail=str(segs9))
+
+    # 无引号台词：标记只影响本句，下一句旁白不继承 NPC 声线
+    segs10 = await segments_of([
+        "⟦v:npc_a e:愤怒⟧站住，把东西放下！",
+        "你转身离开了巷子。",
+    ], tts_inst=tts_n, state={})
+    check("无引号台词本句是 NPC 声线", segs10[0][1] == "npc_a",
+          detail=str(segs10))
+    check("无引号台词后旁白不泄漏", segs10[-1][1] == "" and
+          "转身离开" in segs10[-1][0], detail=str(segs10))
+
+    # 旁白情绪记忆：⟦v:旁白声线 e:情绪⟧ 设置氛围后，无标记旁白沿用，
+    # 跨回合（同一 state）延续，直到新旁白标记切换
+    st: dict = {}
+    segs11 = await segments_of([
+        "⟦v:narrator_m e:悲伤⟧雨还在下。",
+        "你裹紧斗篷，走进客栈。",
+    ], tts_inst=tts_n, state=st)
+    check("旁白氛围标记后旁白带情绪", all(v == "" and e == "悲伤"
+                                        for _, v, e in segs11), detail=str(segs11))
+    segs12 = await segments_of(["大堂里灯火昏黄。"], tts_inst=tts_n, state=st)
+    check("旁白情绪跨回合延续", segs12[0] == ("大堂里灯火昏黄。", "", "悲伤"),
+          detail=str(segs12))
+    segs13 = await segments_of([
+        "⟦v:narrator_m e:平静⟧天亮了。",
+        "雪停了。",
+    ], tts_inst=tts_n, state=st)
+    check("旁白氛围可被新标记切换", all(e == "平静" for _, _, e in segs13),
+          detail=str(segs13))
+
+    # 旁白氛围标记不污染 NPC 引号继承（last_voice 仍是上一个 NPC）
+    segs14 = await segments_of([
+        "⟦v:npc_a e:平静⟧「你来了。」",
+        "⟦v:narrator_m e:神秘⟧屋里忽然暗了下来。",
+        "「还有谁在里面？」",
+    ], tts_inst=tts_n, state={})
+    check("旁白标记后新引号仍继承上一 NPC", segs14[-1][1] == "npc_a",
+          detail=str(segs14))
+    check("旁白句带氛围情绪", any(v == "" and e == "神秘" and "暗了下来" in t
+                                for t, v, e in segs14), detail=str(segs14))
 
     print("== 4. _resolve_voice：声线 id 容错 ==")
     tts2 = CosyVoiceTTS(voices={v: {"prompt_wav": "x", "instruct": ""} for v in
