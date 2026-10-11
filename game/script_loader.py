@@ -45,6 +45,11 @@ def _validate(adv: dict, fname: str) -> None:
                     f"{fname}: scenes[{i}].exits 指向不存在的场景 {ex!r}")
     for i, npc in enumerate(adv["npcs"]):
         _require(npc, NPC_REQUIRED, f"{fname}: npcs[{i}]")
+        if npc.get("voice") == "narrator_m":
+            # NPC 占用旁白声线会让玩家分不清谁在说话（真人局串音实锤），
+            # 旁白声线必须专属旁白；这里只告警不报错（loader 不知声线注册表）
+            print(f"[warn] {fname}: npcs[{i}] {npc['name']!r} 的 voice 是 "
+                  f"narrator_m，会与旁白串音，请改用 npc_* 声线")
     ending_ids: set = set()
     for i, ending in enumerate(adv["endings"]):
         _require(ending, ENDING_REQUIRED, f"{fname}: endings[{i}]")

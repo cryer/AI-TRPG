@@ -28,7 +28,10 @@
   "sherpa_asr": {
     "model_dir": "models/sherpa-asr-bilingual-zh-en",
     "provider": "cpu",
-    "num_threads": 4
+    "num_threads": 4,
+    "decoding_method": "modified_beam_search",
+    "hotwords_file": "configs/asr_hotwords.txt",
+    "hotwords_score": 1.5
   },
   "sherpa_tts": {
     "model_dir": "models/vits-zh-hf-fanchen-C",
@@ -47,9 +50,21 @@
     "cudnn_benchmark": false,
     "speed": 1.0,
     "merge_max_chars": 150,
-    "merge_wait_s": 0.05,
-    "emotions": ["平静", "紧张", "恐惧", "愤怒", "悲伤", "神秘",
-                 "激动", "低语", "恭敬", "犹豫", "温柔", "威严"],
+    "merge_wait_s": 0.4,
+    "emotions": [
+      "平静",
+      "紧张",
+      "恐惧",
+      "愤怒",
+      "悲伤",
+      "神秘",
+      "激动",
+      "低语",
+      "恭敬",
+      "犹豫",
+      "温柔",
+      "威严"
+    ],
     "voices": {
       "narrator_m": {
         "prompt_wav": "models/voices/narrator_m.wav",
@@ -71,7 +86,8 @@
         "prompt_wav": "models/voices/npc_male_young.wav",
         "instruct": "用沉稳的青年语气说话"
       }
-    }
+    },
+    "merge_head_chars": 48
   },
   "kimi": {
     "model": "kimi-for-coding-highspeed",
@@ -86,11 +102,21 @@
     "resource_id": "seed-tts-2.0",
     "emotion_scale": 4,
     "voices": {
-      "narrator_m": {"speaker": "zh_male_xuanyijieshuo_uranus_bigtts"},
-      "npc_female": {"speaker": "zh_female_gaolengyujie_uranus_bigtts"},
-      "npc_female_young": {"speaker": "zh_female_linjianvhai_uranus_bigtts"},
-      "npc_male_old": {"speaker": "zh_male_yuanboxiaoshu_uranus_bigtts"},
-      "npc_male_young": {"speaker": "zh_male_yangguangqingnian_uranus_bigtts"}
+      "narrator_m": {
+        "speaker": "zh_male_xuanyijieshuo_uranus_bigtts"
+      },
+      "npc_female": {
+        "speaker": "zh_female_gaolengyujie_uranus_bigtts"
+      },
+      "npc_female_young": {
+        "speaker": "zh_female_linjianvhai_uranus_bigtts"
+      },
+      "npc_male_old": {
+        "speaker": "zh_male_yuanboxiaoshu_uranus_bigtts"
+      },
+      "npc_male_young": {
+        "speaker": "zh_male_yangguangqingnian_uranus_bigtts"
+      }
     },
     "emotions": {
       "平静": "neutral",
@@ -105,7 +131,9 @@
       "犹豫": "shy",
       "温柔": "tender",
       "威严": "coldness"
-    }
+    },
+    "merge_wait_s": 0.4,
+    "merge_head_chars": 48
   },
   "game": {
     "adventures_dir": "adventures",

@@ -51,7 +51,8 @@ class VolcengineTTS:
                  speech_rate: int = 0,
                  voices: dict | None = None, emotions: dict | None = None,
                  emotion_scale: int | None = None,
-                 merge_max_chars: int = 150, merge_wait_s: float = 0.05):
+                 merge_max_chars: int = 150, merge_wait_s: float = 0.05,
+                 merge_head_chars: int = 48):
         self.api_key = api_key or os.environ["VOLCENGINE_API_KEY"]
         # 兜底 speaker：标记缺失或声线 id 查不到映射时使用
         self.speaker = speaker
@@ -66,6 +67,8 @@ class VolcengineTTS:
         self.emotion_scale = emotion_scale
         self.merge_max_chars = merge_max_chars
         self.merge_wait_s = merge_wait_s
+        # 回合第一批次的合并上限（0=不单独限制，见 tags.segment_stream）
+        self.merge_head_chars = merge_head_chars
         # 旁白氛围情绪（跨回合延续，见 tags.segment_stream 的 state）
         self._narrator_state: dict = {}
         self._session: aiohttp.ClientSession | None = None
@@ -114,7 +117,8 @@ class VolcengineTTS:
         async for text, voice_id, emotion in segment_stream(
                 sentences, self.merge_max_chars, self.merge_wait_s,
                 narrator_voice="narrator_m" if "narrator_m" in self.voices else "",
-                state=self._narrator_state):
+                state=self._narrator_state,
+                merge_head_chars=self.merge_head_chars):
             if not text.strip():
                 continue
             body = self._build_body(text, voice_id, emotion)

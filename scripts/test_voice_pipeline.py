@@ -1,9 +1,11 @@
 """标记原子切分 / 跨句声线保持 / 句间合并 的离线验证（无需 GPU）。
 
-覆盖三个真实对局暴露的 bug：
+覆盖真实对局暴露的 bug：
 1. 分句器在 ⟦v:x e:恭敬⟧ 标记内部的冒号处切分 → 残缺标记被 TTS 念出；
 2. NPC 多句台词只有首句带标记 → 后续句回落旁白声线；
-3. 连续旁白逐句独立合成 → 语气/语速句间跳变（验证同 key 合并）。
+3. 连续旁白逐句独立合成 → 语气/语速句间跳变（验证同 key 合并）；
+4. 合并宽限太小时从句攒不到一起 → 半截短语 prosody 断裂、逐批采样
+   语速突变（验证 merge_wait_s 宽限与 merge_head_chars 首批上限）。
 """
 
 import asyncio
@@ -214,6 +216,35 @@ async def main():
           detail=str(segs14))
     check("旁白句带氛围情绪", any(v == "" and e == "神秘" and "暗了下来" in t
                                 for t, v, e in segs14), detail=str(segs14))
+
+    print("== 3c. 合并宽限与首批上限（断句/语速突变修复回归）==")
+    # 真人局实锤：merge_wait_s=0.05 时上游从句间隔 ~0.2s 攒不到一起，
+    # 逐从句独立合成 → 「一股混着酒气、」这类半截短语 prosody 断裂、
+    # 逐批采样导致语速突变。宽限 0.4s 后应合并成少量大批次。
+    tts_m = CosyVoiceTTS(merge_max_chars=150, merge_wait_s=0.4,
+                         merge_head_chars=48)
+    clauses = ["一股混着酒气、", "汗气和灶火味的暖流扑面而来。",
+               "大堂里灯火昏黄，", "却是满座——",
+               "正中一张桌上，", "个清瘦老者正拍着醒木说书，",
+               "说的是《锦衣夜行》，", "满座听得入神。"]
+
+    async def segments_trickle(sentences, interval):
+        async def gen():
+            for s in sentences:
+                yield s
+                await asyncio.sleep(interval)
+        return [seg async for seg in tts_m._segment_stream(gen(), state={})]
+
+    segs15 = await segments_trickle(clauses, 0.2)   # 间隔 < 宽限 → 合并
+    check("从句间隔 0.2s 时合并成少量批次", len(segs15) <= 3,
+          detail=str([(len(t), v) for t, v, e in segs15]))
+    check("合并后文本完整", "".join(t for t, v, e in segs15) ==
+          "".join(clauses), detail=str(segs15))
+    check("首批不超过 head 上限+一个从句", len(segs15[0][0]) <= 60,
+          detail=f"first={len(segs15[0][0])}")
+
+    segs16 = await segments_trickle(clauses[:2], 0.5)  # 间隔 > 宽限 → 不合并
+    check("从句间隔 0.5s 时不合并", len(segs16) == 2, detail=str(segs16))
 
     print("== 4. _resolve_voice：声线 id 容错 ==")
     tts2 = CosyVoiceTTS(voices={v: {"prompt_wav": "x", "instruct": ""} for v in

@@ -63,7 +63,9 @@
       "犹豫": "shy",
       "温柔": "tender",
       "威严": "coldness"
-    }
+    },
+    "merge_wait_s": 0.4,
+    "merge_head_chars": 48
   },
   "kimi": {
     "model": "kimi-for-coding-highspeed",

@@ -87,6 +87,7 @@ class CosyVoiceTTS:
                  emotions: list | None = None,
                  merge_max_chars: int = 150,
                  merge_wait_s: float = 0.05,
+                 merge_head_chars: int = 48,
                  sample_top_p: float | None = None,
                  cuda_visible_devices: str | None = None,
                  sample_rate: int = 16000):
@@ -117,6 +118,9 @@ class CosyVoiceTTS:
         # 句间合并上限/宽限（见 _segment_stream）；调小首音更快但句间语气更易跳变
         self.merge_max_chars = merge_max_chars
         self.merge_wait_s = merge_wait_s
+        # 回合第一批次的合并上限：保住首音延迟，之后的批次才攒到
+        # merge_max_chars 换 prosody 连贯（0=不单独限制）
+        self.merge_head_chars = merge_head_chars
         # LM 采样 top_p 覆盖（yaml 默认 0.8）。调低可减少逐批次独立采样带来的
         # 旁白语气/音色漂移；None 保持官方默认
         self.sample_top_p = sample_top_p
@@ -441,7 +445,8 @@ class CosyVoiceTTS:
         """
         return segment_stream(sentences, self.merge_max_chars, self.merge_wait_s,
                               narrator_voice=self.default_voice,
-                              state=self._narrator_state if state is None else state)
+                              state=self._narrator_state if state is None else state,
+                              merge_head_chars=self.merge_head_chars)
 
     async def synth(self, sentences, gen_id: int) -> AsyncIterator[AudioChunk]:
         loop = asyncio.get_running_loop()

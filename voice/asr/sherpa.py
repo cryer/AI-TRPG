@@ -29,13 +29,18 @@ class SherpaOnnxASR:
                  tokens: str = "tokens.txt",
                  provider: str = "cpu", num_threads: int = 2,
                  sample_rate: int = 16000,
-                 decoding_method: str = "greedy_search"):
+                 decoding_method: str = "greedy_search",
+                 hotwords_file: str = "", hotwords_score: float = 1.5):
         self.model_dir = model_dir
         self.files = dict(encoder=encoder, decoder=decoder, joiner=joiner, tokens=tokens)
         self.provider = provider
         self.num_threads = num_threads
         self.sample_rate = sample_rate
         self.decoding_method = decoding_method
+        # 热词（剧本名/NPC 名/跑团术语）：同音错字是语音链路选本失败的主因
+        # （「东盟夜雨」→「龙门夜雨」实锤）。热词只在 modified_beam_search 下生效
+        self.hotwords_file = hotwords_file
+        self.hotwords_score = hotwords_score
         self._recognizer = None
 
     def _get_recognizer(self):
@@ -45,12 +50,18 @@ class SherpaOnnxASR:
             for p in f.values():
                 if not os.path.isfile(p):
                     raise FileNotFoundError(f"sherpa ASR model file missing: {p}")
+            kwargs = {}
+            if self.hotwords_file and os.path.isfile(self.hotwords_file):
+                kwargs.update(hotwords_file=self.hotwords_file,
+                              hotwords_score=self.hotwords_score)
+            elif self.hotwords_file:
+                print(f"[warn] ASR 热词文件不存在，忽略: {self.hotwords_file}")
             self._recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
                 tokens=f["tokens"], encoder=f["encoder"], decoder=f["decoder"],
                 joiner=f["joiner"], num_threads=self.num_threads,
                 sample_rate=self.sample_rate, feature_dim=80,
                 decoding_method=self.decoding_method, provider=self.provider,
-            )
+                **kwargs)
         return self._recognizer
 
     async def warmup(self) -> None:

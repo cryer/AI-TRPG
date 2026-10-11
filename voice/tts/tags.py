@@ -57,6 +57,7 @@ async def segment_stream(
         merge_wait_s: float = 0.05,
         narrator_voice: str = "",
         state: dict | None = None,
+        merge_head_chars: int = 0,
 ) -> AsyncIterator[tuple[str, str, str | None]]:
     """句流 → 合并后的 (text, voice, emotion) 合成批次流。
 
@@ -77,6 +78,9 @@ async def segment_stream(
     - 同 (voice, emotion) 的相邻片段合并（≤merge_max_chars）：一次合成
       调用内 prosody 连续规划，句间语气/语速不跳变。下一句非阻塞拉取
       （merge_wait_s 宽限），上游没就绪就先合成，不拖慢首音。
+    - 首批次上限 merge_head_chars（0=不单独限制，同 merge_max_chars）：
+      回合第一批只攒到这个长度就先发合成，保住首音延迟；之后的批次
+      （TTS 已领先播放）才放心攒到 merge_max_chars 换 prosody 连贯。
     """
     if state is None:
         state = {}
@@ -87,6 +91,7 @@ async def segment_stream(
     in_quote = False
     buf: list[str] = []
     buf_key = ("", None)
+    head_done = False          # 回合第一批是否已发出（首批用 merge_head_chars 封顶）
     upstream_end = False
     pending: asyncio.Task | None = None
 
@@ -110,12 +115,18 @@ async def segment_stream(
         pending = None
         return raw
 
+    head_cap = merge_head_chars or merge_max_chars
+
+    def current_cap() -> int:
+        return merge_max_chars if head_done else min(head_cap, merge_max_chars)
+
     while True:
         raw = await pull(block=not buf)
         if raw is None:
             if buf:
                 yield "".join(buf), buf_key[0], buf_key[1]
                 buf = []
+                head_done = True
             if upstream_end:
                 return
             continue
@@ -162,12 +173,14 @@ async def segment_stream(
             if buf and key != buf_key:
                 yield "".join(buf), buf_key[0], buf_key[1]
                 buf = []
+                head_done = True
             if not buf:
                 buf_key = key
             buf.append(text)
-            if sum(len(t) for t in buf) >= merge_max_chars:
+            if sum(len(t) for t in buf) >= current_cap():
                 yield "".join(buf), buf_key[0], buf_key[1]
                 buf = []
+                head_done = True
         # 句边界：引号未开时声线标记作废——「⟦v:x⟧ 无引号台词。」只允许
         # 影响本句，防止 NPC 声线/情绪泄漏进后续旁白
         if not in_quote:
