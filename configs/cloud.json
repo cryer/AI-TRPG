@@ -70,7 +70,7 @@
   "kimi": {
     "model": "kimi-for-coding-highspeed",
     "reasoning_effort": "low",
-    "max_tokens": 800
+    "max_tokens": 1600
   },
   "game": {
     "adventures_dir": "adventures",

@@ -329,6 +329,70 @@ async def main():
     check("跨 token 流式归属仍生效",
           "⟦v:npc_male_young⟧「拿下！」" in out, detail=out)
 
+    print("== 7. NPC 身份标签剥离（名字不念出来）==")
+    # 真人局实锤（web_20261011_135413）：LLM 写「裴千户⟦s:…⟧「……」」，
+    # 标记被剥/改写后名字标签留在正文里，被 TTS 原样念出
+    out = await rewritten(["裴千户⟦s:裴千户 e:愤怒⟧「都听着！谁也不许上楼！」"])
+    check("标记前的身份标签被剥掉",
+          out == "⟦v:npc_male_young e:愤怒⟧「都听着！谁也不许上楼！」",
+          detail=out)
+    out = await rewritten(["满堂哗然。\n\n裴千户⟦s:裴千户 e:愤怒⟧「拿下！」"])
+    check("句界后的身份标签被剥掉",
+          out == "满堂哗然。⟦v:npc_male_young e:愤怒⟧「拿下！」",
+          detail=out)
+    out = await rewritten(["裴千户：「一间一间搜！」"])
+    check("冒号标签剥离 + 归属注入声线",
+          out == "⟦v:npc_male_young⟧「一间一间搜！」", detail=out)
+    out = await rewritten(["…便又搁下了。\n\n老乞丐",
+                           "⟦s:老乞丐 e:神秘⟧「小老弟，你知道嗎？」"])
+    check("跨 token 的标签也被剥掉",
+          "老乞丐⟦" not in out and "搁下了。" in out
+          and "⟦v:npc_male_old e:神秘⟧「小老弟" in out, detail=out)
+    out = await rewritten(["陆文渊⟦s:老乞丐 e:威严⟧「密信在此。」"])
+    check("后缀别名标签（陆文渊←真钦差陆文渊）剥离",
+          out == "⟦v:npc_male_old e:威严⟧「密信在此。」", detail=out)
+    out = await rewritten(["裴千户守在门口，见你要进，眼皮一抬。"])
+    check("叙述中提及名字不受影响",
+          out == "裴千户守在门口，见你要进，眼皮一抬。", detail=out)
+    out = await rewritten(["你决定下楼去找裴千户"])
+    check("流尾的名字（非标签）保留", out == "你决定下楼去找裴千户",
+          detail=out)
+    out = await rewritten(["燕三娘指了指招牌「龙门客栈」，没说话。"])
+    check("名字+非台词引号不误剥",
+          out == "燕三娘指了指招牌「龙门客栈」，没说话。", detail=out)
+
+    print("== 8. max_tokens 截断自动续写 ==")
+    # 真人局实锤（turn 47）：kimi-for-coding 的 thinking 计入 max_tokens，
+    # 长思考回合正文断在「燕三娘趁机」戛然而止
+    class _TruncLLM:
+        def __init__(self):
+            self.calls = 0
+
+        async def stream_events(self, msgs, gen_id, tools=None):
+            self.calls += 1
+            if self.calls == 1:
+                for ch in "燕三娘趁机":
+                    yield ch
+                yield {"tool_calls": None, "content": "燕三娘趁机",
+                       "finish_reason": "length"}
+            else:
+                for ch in "翻身跃上栏杆。":
+                    yield ch
+                yield {"tool_calls": None, "content": "翻身跃上栏杆。",
+                       "finish_reason": "stop"}
+
+    agent8 = GameAgent({}, _TruncLLM())
+    agent8.engine.start("wuxia_inn")
+    out8 = "".join([t async for t in agent8.respond(
+        [{"role": "system", "content": "x"}], 1)])
+    check("截断后自动续写且文本衔接",
+          out8 == "燕三娘趁机翻身跃上栏杆。", detail=out8)
+    check("续写只多调一次 LLM", agent8.llm.calls == 2,
+          detail=f"calls={agent8.llm.calls}")
+    check("续写提示不污染 history",
+          not any("截断" in (m.get("content") or "") for m in agent8.history),
+          detail=str(agent8.history))
+
     print("== 结果 ==")
     print("ALL OK" if FAIL == 0 else f"{FAIL} 项失败")
     return FAIL

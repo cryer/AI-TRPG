@@ -34,7 +34,8 @@ def resolve_voice_id(voice_id: str, registered, default: str) -> str:
 
     registered 是可迭代的已注册 id 集合。静默回退默认声线会让女 NPC 变
     男声（真人局实锤），所以依次尝试：精确 → 补/去 npc_ 前缀 →
-    唯一子串匹配 → 默认声线（告警）。
+    唯一子串匹配 → 性别/年龄关键词（LLM 自创 id 如 npc_male_elegant，
+    真人局实锤柳三弦整局掉成旁白音）→ 默认声线（告警）。
     """
     registered = list(registered)
     if not voice_id:
@@ -47,6 +48,22 @@ def resolve_voice_id(voice_id: str, registered, default: str) -> str:
     matches = [v for v in registered if voice_id in v or v in voice_id]
     if len(matches) == 1:
         return matches[0]
+    low = voice_id.lower()
+    young = any(k in low for k in ("young", "girl", "child"))
+    old = any(k in low for k in ("old", "elder"))
+    if any(k in low for k in ("female", "woman", "girl")):
+        prefs = ("npc_female_young", "npc_female") if young \
+            else ("npc_female", "npc_female_young")
+    elif "male" in low:
+        prefs = ("npc_male_young", "npc_male_old") if young else \
+            ("npc_male_old", "npc_male_young")   # 无年龄词默认偏老年
+            # （npc_male_elegant 这类自创 id 多为中老年角色）
+    else:
+        prefs = ()
+    for cand in prefs:
+        if cand in registered:
+            print(f"[warn] 声线 {voice_id!r} 未注册，按性别/年龄关键词兜底 {cand}")
+            return cand
     print(f"[warn] 声线 {voice_id!r} 未注册，回退默认声线")
     return default
 

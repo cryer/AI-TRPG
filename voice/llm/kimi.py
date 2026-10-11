@@ -66,9 +66,12 @@ class KimiLLM:
                             tools: list[dict] | None = None) -> AsyncIterator:
         """带 function calling 的事件流。
 
-        content token 照常以 str yield；流结束时若收到 tool_calls，最后 yield
-        一个 dict：{"tool_calls": [{"id", "name", "arguments"}], "content": str}，
+        content token 照常以 str yield；流结束时最后 yield 一个 dict：
+        {"tool_calls": [...] | None, "content": str, "finish_reason": str | None}，
         其中 arguments 为 json.loads 后的 dict（解析失败则保留原始字符串）。
+        finish_reason 用于识别 max_tokens 截断（"length"）——kimi-for-coding
+        强制 thinking，reasoning token 也计入 max_tokens，长思考回合会把
+        正文截断在句子中间（真人局实锤），调用方需要据此自动续写。
         """
         body = {"model": self.model, "messages": messages, "stream": True,
                 "max_tokens": self.max_tokens,
@@ -80,6 +83,7 @@ class KimiLLM:
         session = await self._get_session()
         content_parts: list[str] = []
         pending: dict[int, dict] = {}  # index → 累积中的 tool_call
+        finish_reason: str | None = None
         try:
             async with session.post(f"{self.base_url}/chat/completions", json=body) as resp:
                 if resp.status != 200:
@@ -92,7 +96,10 @@ class KimiLLM:
                     payload = line[6:]
                     if payload == b"[DONE]":
                         break
-                    delta = json.loads(payload)["choices"][0].get("delta", {})
+                    choice = json.loads(payload)["choices"][0]
+                    if choice.get("finish_reason"):
+                        finish_reason = choice["finish_reason"]
+                    delta = choice.get("delta", {})
                     content = delta.get("content")
                     if content:
                         content_parts.append(content)
@@ -109,6 +116,7 @@ class KimiLLM:
                             acc["arguments"] += fn["arguments"]
         finally:
             pass  # session 常驻复用（TLS/TCP 预热），连接由 cancel 时 aiohttp 自动释放
+        tool_calls = None
         if pending:
             tool_calls = []
             for idx in sorted(pending):
@@ -119,7 +127,8 @@ class KimiLLM:
                     args = acc["arguments"]
                 tool_calls.append({"id": acc["id"], "name": acc["name"],
                                    "arguments": args})
-            yield {"tool_calls": tool_calls, "content": "".join(content_parts)}
+        yield {"tool_calls": tool_calls, "content": "".join(content_parts),
+               "finish_reason": finish_reason}
 
     async def close(self) -> None:
         if self._session is not None and not self._session.closed:

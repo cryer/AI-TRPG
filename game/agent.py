@@ -22,6 +22,7 @@ from game.tools import DM_TOOLS, LOBBY_TOOLS, SESSION_CONTROL_TOOLS, execute_too
 
 MAX_TOOL_ROUNDS = 5      # 防死循环
 MAX_EMPTY_RETRIES = 2    # LLM 空回复（打断后易发）自动重试次数
+MAX_CONTINUE_RETRIES = 2  # max_tokens 截断（finish_reason=length）自动续写次数
 
 LOBBY_PROMPT = (
     "你是一家桌游店的老板，正在用语音电话接待一位想玩单人跑团剧本的顾客。"
@@ -68,6 +69,8 @@ _DM_BASE_RULES = (
     "台词开头紧挨着写 ⟦s:NPC名字 e:情绪⟧——名字严格用名册里的名字，"
     "台词用引号（「」或“”）完整包住。"
     "示例——燕三娘紧张地说：⟦s:燕三娘 e:紧张⟧「走你的镖，少管闲事。」"
+    "不要在标记外面再单写一个说话人名字当标签（「燕三娘⟦s:…⟧」这种形式"
+    "会让玩家听到名字被念出来）。"
     "不写标记的台词玩家只能用旁白声线听到，所以每个 NPC 每次开口都要标记。"
     "情绪从以下词里选最贴合语境的一个：{emotions}；"
     "同一个 NPC 连续几句台词沿用同一个情绪词，剧情明显转折才换。"
@@ -277,6 +280,27 @@ class _QuoteAttributor:
         self._since_tag = 0
 
 
+# ---------- NPC 身份标签剥离 ----------
+# LLM 爱把台词写成「裴千户⟦s:…⟧「……」」「裴千户：「……」」——名字标签在
+# 标记/引号外面，会被 TTS 原样念出来（真人局实锤）。确定性剥离规则：
+# 句界（流开头/换行/句末标点）后、紧挨着标记或开引号的「名册名+冒号?」
+# 是身份标签，从文本中删掉； narrative 里提及名字（裴千户守在门口）不满足
+# 「句界 + 紧跟标记/引号」，不受影响。
+_LABEL_BOUNDARY_CHARS = "\n。！？…!?"
+
+
+def _label_names(adv: dict) -> list[str]:
+    """名册全名/别名及其 ≥2 字纯中文后缀（陆文渊 ← 真钦差陆文渊、千户 ← 裴千户）。"""
+    names: set[str] = set()
+    for n in adv.get("npcs", []):
+        for alias in _npc_aliases(n["name"]):
+            for i in range(len(alias)):
+                cand = alias[i:]
+                if len(cand) >= 2 and re.fullmatch(r"[一-鿿]+", cand):
+                    names.add(cand)
+    return sorted(names, key=len, reverse=True)   # 长名优先匹配
+
+
 class GameAgent:
     def __init__(self, cfg: dict, llm):
         game_cfg = cfg.get("game", {})
@@ -297,6 +321,7 @@ class GameAgent:
             "default_voice", "narrator_m")
         self._narration_hook = lambda on: None   # bind 后接 TurnManager
         self.engine.on_session_reset = self._on_session_reset
+        self._label_cache: tuple | None = None   # (adventure_id, strip_re, tail_re)
 
     def bind_turn_manager(self, tm) -> None:
         """接线（AGENTS.md §2.2）：共享 history、打断模式回调、局间清理。"""
@@ -361,18 +386,75 @@ class GameAgent:
                       f"（该段台词将用旁白声线）")
         return f"⟦v:{voice}{emotion}⟧" if voice else ""
 
+    def _label_regexes(self):
+        """身份标签剥离用的 (strip_re, tail_re)；lobby/无名册时为 (None, None)。
+
+        strip_re：句界后的「名册名+冒号?」紧跟标记或开引号 → 删标签；
+        tail_re：文本尾巴上的「句界+名册名+冒号?」→ 先扣留，等下一个事件
+        确认后面跟的是不是标记/引号（是则丢弃，否则放行）。
+        """
+        adv = self.engine.adventure
+        if adv is None:
+            return None, None
+        if self._label_cache and self._label_cache[0] == adv["id"]:
+            return self._label_cache[1], self._label_cache[2]
+        names = _label_names(adv)
+        if not names:
+            strip_re = tail_re = None
+        else:
+            alt = "|".join(re.escape(x) for x in names)
+            strip_re = re.compile(
+                r'(?<=[' + _LABEL_BOUNDARY_CHARS + r'])\s*(?:' + alt +
+                r')[：:]?(?=⟦|[「『“"＂])')
+            tail_re = re.compile(
+                r'(?<=[' + _LABEL_BOUNDARY_CHARS + r'])(\s*(?:' + alt +
+                r')[：:]?)$')
+        self._label_cache = (adv["id"], strip_re, tail_re)
+        return strip_re, tail_re
+
     async def _voice_rewrite(self, stream) -> AsyncIterator:
         """流式过滤器：把 LLM 写的 ⟦s:...⟧ 标记改写成声线 id，未闭合标记丢弃。
 
         非 str 事件（tool_calls 字典）原样透传；改写后的文本才进 history，
         与玩家实际听到的一致。LLM 没写标记的引号台词由 _QuoteAttributor
         按「NPC 名 + 说话动词/冒号」确定性归属，不再依赖模型自觉。
+        台词前的身份标签（裴千户⟦s:…⟧ / 裴千户：「…」）在此剥离，不念出来。
         """
         buf = ""
         in_tag = False
         attr = _QuoteAttributor(self)
+        strip_re, tail_re = self._label_regexes()
+        held = ""                 # 疑似身份标签的扣留尾巴（等下一事件确认）
+        prev_boundary = True      # 上一产出字符是否句界（流开头视作句界）
+
+        def _emit(text: str) -> str:
+            """attr 归属 + 身份标签剥离/扣留，返回可立即产出的文本。"""
+            nonlocal held, prev_boundary
+            s = held + attr.feed(text)
+            held = ""
+            if not s:
+                return ""
+            if strip_re is not None:
+                # 哨兵 \n：让句界 lookbehind 覆盖 s 开头（仅当上一产出在句界）
+                if prev_boundary:
+                    s = "\n" + s
+                s = strip_re.sub("", s)
+                m = tail_re.search(s)
+                if m:
+                    held = m.group(1)
+                    s = s[:m.start(1)]
+                if prev_boundary:
+                    s = s[1:] if s.startswith("\n") else s
+            if s:
+                prev_boundary = s[-1] in _LABEL_BOUNDARY_CHARS
+            return s
+
         async for ev in stream:
             if not isinstance(ev, str):
+                # 工具调用事件：回合文本到此为止，扣留的尾巴不是标签，放行
+                if held:
+                    yield held
+                    held = ""
                 buf, in_tag = "", False
                 yield ev
                 continue
@@ -380,27 +462,32 @@ class GameAgent:
             for ch in ev:
                 if in_tag:
                     if ch == "⟧":
+                        # 标签后面紧跟标记 → 确认是身份标签，丢弃扣留
+                        held = ""
                         tag = self._rewrite_tag(buf)
                         if tag:
                             out.append(tag)
                             attr.mark_tag()
+                            prev_boundary = False
                         buf, in_tag = "", False
                     else:
                         buf += ch
                 elif ch == "⟦":
                     if buf:
-                        out.append(attr.feed(buf))
+                        out.append(_emit(buf))
                         buf = ""
                     in_tag = True
                 else:
                     buf += ch
             if buf and not in_tag:
-                out.append(attr.feed(buf))
+                out.append(_emit(buf))
                 buf = ""
             if out:
                 yield "".join(out)
         if buf and not in_tag:
-            yield attr.feed(buf)
+            yield _emit(buf)
+        if held:
+            yield held
 
     async def respond(self, messages: list[dict],
                       gen_id: int) -> AsyncIterator[str]:
@@ -415,6 +502,8 @@ class GameAgent:
         self.memory.maybe_summarize(self.llm)
         msgs = [messages[0]] + self.memory.windowed()
         empty_retries = 0
+        continue_retries = 0
+        full_text = ""
         for _ in range(MAX_TOOL_ROUNDS):
             if self.engine.state == LOBBY:
                 tools = LOBBY_TOOLS
@@ -425,20 +514,42 @@ class GameAgent:
                 tools = DM_TOOLS + SESSION_CONTROL_TOOLS
             content_parts: list[str] = []
             tool_calls = None
+            finish_reason = None
             async for ev in self._voice_rewrite(
                     stream_events(msgs, gen_id, tools=tools)):
                 if isinstance(ev, str):
                     content_parts.append(ev)
                     yield ev
                 else:
-                    tool_calls = ev["tool_calls"]
+                    tool_calls = ev.get("tool_calls")
+                    finish_reason = ev.get("finish_reason")
+            round_text = "".join(content_parts)
+            full_text += round_text
             if not tool_calls:
                 # 空回复（无正文无工具调用）：打断后的下一轮容易触发，
                 # 不逐字重试玩家只能面对沉默。temperature=1 下重试是新采样
-                if not "".join(content_parts).strip() \
+                if not round_text.strip() \
                         and empty_retries < MAX_EMPTY_RETRIES:
                     empty_retries += 1
                     print(f"[game] LLM 空回复，重试第 {empty_retries} 次")
+                    continue
+                # max_tokens 触顶截断：kimi-for-coding 强制 thinking 且
+                # reasoning token 计入上限，长思考回合会把正文断在句子中间
+                # （真人局实锤「燕三娘趁机」戛然而止）。续写只进本地 msgs，
+                # 不进 history——整段回复由 TurnManager 汇总成一条 assistant
+                # 消息入库，history 不受续写提示污染
+                if finish_reason == "length" and round_text.strip() \
+                        and continue_retries < MAX_CONTINUE_RETRIES:
+                    continue_retries += 1
+                    print(f"[game] LLM 回复触顶截断（finish_reason=length，"
+                          f"已说 {len(full_text)} 字），自动续写第 "
+                          f"{continue_retries} 次")
+                    msgs = msgs + [
+                        {"role": "assistant", "content": full_text},
+                        {"role": "user", "content":
+                         "（系统提示：你刚才的回复达到长度上限被截断了。请紧接"
+                         "断点继续叙述，不要重复已经说过的内容，也不要回应这"
+                         "条提示本身。）"}]
                     continue
                 return
             # 先收齐所有工具结果，再一次原子 append——history 里出现没有
