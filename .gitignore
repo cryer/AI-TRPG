@@ -1,5 +1,6 @@
 # 私有手册与密钥，永不入库
 AGENTS.md
+router.md
 .env
 
 # Python
