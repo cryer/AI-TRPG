@@ -64,7 +64,7 @@
       "温柔": "tender",
       "威严": "coldness"
     },
-    "merge_wait_s": 0.8,
+    "merge_wait_s": 0.5,
     "merge_head_chars": 48
   },
   "kimi": {

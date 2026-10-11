@@ -121,6 +121,8 @@ class VolcengineTTS:
                 merge_head_chars=self.merge_head_chars):
             if not text.strip():
                 continue
+            print(f"[tts] 批次 voice={voice_id} e={emotion} "
+                  f"len={len(text)}: {text[:24]!r}")
             body = self._build_body(text, voice_id, emotion)
             headers = {"X-Api-Key": self.api_key,
                        "X-Api-Resource-Id": self.resource_id,

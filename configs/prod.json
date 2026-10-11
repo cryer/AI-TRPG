@@ -49,8 +49,8 @@
     "nfe": 10,
     "cudnn_benchmark": false,
     "speed": 1.0,
-    "merge_max_chars": 250,
-    "merge_wait_s": 0.8,
+    "merge_max_chars": 150,
+    "merge_wait_s": 0.5,
     "sample_top_p": 0.7,
     "emotions": [
       "平静",
@@ -134,7 +134,7 @@
       "温柔": "tender",
       "威严": "coldness"
     },
-    "merge_wait_s": 0.8,
+    "merge_wait_s": 0.5,
     "merge_head_chars": 48
   },
   "game": {

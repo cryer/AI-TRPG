@@ -274,6 +274,33 @@ async def main():
     check("旁白别名 → 旁白声线",
           agent._rewrite_tag("s:旁白 e:神秘") == "⟦v:narrator_m e:神秘⟧")
 
+    print("== 6. 无标记引号台词的确定性声线归属 ==")
+    agent6 = GameAgent({}, None)
+    agent6.engine.start("wuxia_inn")   # 裴千户=npc_male_young 燕三娘=npc_female
+
+    async def rewritten(tokens):
+        async def gen():
+            for t in tokens:
+                yield t
+        return "".join([t async for t in agent6._voice_rewrite(gen())])
+
+    out = await rewritten(["裴千户尖着嗓子喝道：「封栈！谁都不许走！」"])
+    check("名册 NPC + 喝道 → 注入其声线",
+          "⟦v:npc_male_young⟧「封栈！" in out, detail=out)
+    out = await rewritten(["燕三娘冷笑一声，说：「走你的镖，少管闲事。」"])
+    check("名册 NPC + 说 → 注入其声线",
+          "⟦v:npc_female⟧「走你的镖" in out, detail=out)
+    out = await rewritten(["楼上传来一声凄厉惊叫——「杀人啦！」"])
+    check("无 NPC 名的引号不注入", "⟦v:" not in out, detail=out)
+    out = await rewritten(["燕三娘指了指招牌「龙门客栈」，没说话。"])
+    check("只是提及 NPC（无说话动词/冒号）不注入", "⟦v:" not in out, detail=out)
+    out = await rewritten(["⟦s:燕三娘 e:紧张⟧「别过来。」"])
+    check("已有标记不重复注入", out.count("⟦v:") == 1
+          and "⟦v:npc_female e:紧张⟧「别过来。」" in out, detail=out)
+    out = await rewritten(["裴千户", "厉声喝道", "：「拿下", "！」"])
+    check("跨 token 流式归属仍生效",
+          "⟦v:npc_male_young⟧「拿下！」" in out, detail=out)
+
     print("== 结果 ==")
     print("ALL OK" if FAIL == 0 else f"{FAIL} 项失败")
     return FAIL

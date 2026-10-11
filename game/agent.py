@@ -64,21 +64,17 @@ _DM_BASE_RULES = (
     "调用 lookup_scene 查询，不要凭印象编造。"
     "打断处理：玩家可能随时打断你的叙述。被打断后不要重播整段，"
     "直接接住玩家的新意图继续（比如「好，你停在门口——你贴上门板仔细听……」）。"
-    "角色配音：系统会给不同角色配不同声线。NPC 开口说话时，必须在他的台词开头"
-    "紧挨着写 ⟦s:NPC名字 e:情绪⟧（名字严格用名册里的名字，标记后不换行直接跟台词），"
-    "台词必须用引号完整包住（「」或“”），说完及时合上引号。"
+    "角色配音（重要）：系统会给不同角色配不同声线。NPC 开口说话时，必须在"
+    "台词开头紧挨着写 ⟦s:NPC名字 e:情绪⟧——名字严格用名册里的名字，"
+    "台词用引号（「」或“”）完整包住。"
     "示例——燕三娘紧张地说：⟦s:燕三娘 e:紧张⟧「走你的镖，少管闲事。」"
-    "台词中间插了叙述、NPC 接着再说时，新引号里的台词不用重复标记。"
-    "情绪从以下词里选最贴合当前语境的一个：{emotions}。不要编造名册之外的 NPC。"
-    "情绪要连贯：同一个 NPC 在连续几句台词里沿用同一个情绪词，"
-    "只有剧情明显转折才换，不要每句都换。标记只写 ⟦s:名字 e:情绪⟧ 这一种形式，"
-    "不要写 ⟦v:...⟧ 或其他变体。"
-    "旁白情绪：你的叙述旁白默认不写任何标记，会自动沿用当前的叙述氛围；"
-    "只有当剧情氛围明显转变时（如发现尸体、危机降临、真相揭晓、转危为安），"
-    "才在旁白段落开头写 ⟦s:旁白 e:情绪⟧ 切换氛围；同一氛围内不要每段都换，"
-    "氛围恢复平常时用 ⟦s:旁白 e:平静⟧ 收回来。"
-    "⟦s:旁白⟧只标记纯叙述段落（没有任何引号的段落）；引号台词前的标记"
-    "只能是 ⟦s:NPC名字⟧，绝不是 ⟦s:旁白⟧。"
+    "不写标记的台词玩家只能用旁白声线听到，所以每个 NPC 每次开口都要标记。"
+    "情绪从以下词里选最贴合语境的一个：{emotions}；"
+    "同一个 NPC 连续几句台词沿用同一个情绪词，剧情明显转折才换。"
+    "标记只写 ⟦s:名字 e:情绪⟧ 这一种形式，不要写 ⟦v:...⟧ 或其他变体。"
+    "旁白默认不写任何标记，会自动沿用当前叙述氛围；只在剧情氛围明显转变时"
+    "（发现尸体、危机降临、真相揭晓、转危为安）在旁白段落开头写"
+    "⟦s:旁白 e:情绪⟧ 切换氛围，氛围恢复平常时用 ⟦s:旁白 e:平静⟧ 收回来。"
     "语音约束：你的所有回复都会被语音合成朗读出来。口语化叙述，单次回复"
     "不超过五六句话（开场白和结局可以稍长）；不要使用 Markdown、列表、表情符号。"
 )
@@ -199,6 +195,87 @@ def _guess_voice(name: str) -> str | None:
 # ⟦s:旁白 e:情绪⟧ 的名字别名：映射到旁白声线（DM 规则约定旁白氛围切换标记）
 _NARRATOR_ALIASES = {"旁白", "叙述", "旁白者", "解说", "narrator"}
 
+# ---------- 确定性引号台词归属 ----------
+# LLM 经常整局不写 ⟦s:⟧ 标记（真人局多次实锤），prompt 约束不可靠。
+# 这里在流式改写层兜底：开引号前若紧挨着的文本里出现「名册 NPC 名 + 说话
+# 动词/冒号」（如「裴千户尖着嗓子喝道：」），自动注入该 NPC 的声线标记。
+_QUOTE_OPEN_CHARS = "「『“"
+_QUOTE_CLOSE_CHARS = "」』”"
+_QUOTE_TOGGLE_CHARS = "\"＂"          # 直引号：同一字符开合切换
+_SPEECH_VERB_RE = re.compile(
+    r"(说|道|喊|喝|问|答|笑|骂|嚷|叹|叫|嘟囔|咕哝|嘀咕|呢喃|喃喃|低语|低声|"
+    r"轻声|惊呼|尖叫|开口|出声|斥责|安慰|告诉|大喝|厉声)")
+_ATTR_TAIL_CHARS = 24     # 在开引号前最多回看这么远找 NPC 名
+_ATTR_TAG_GAP = 4         # 开引号前这么近内已有标记 → 不再注入
+
+
+class _QuoteAttributor:
+    """逐字符走查已改写文本，给无标记的引号台词自动归属 NPC 声线。"""
+
+    def __init__(self, agent: "GameAgent"):
+        self._agent = agent
+        self._tail: list[str] = []        # 最近发出的普通字符（上限 64）
+        self._since_tag = 999             # 距上一个标记之间隔了多少字符
+        self._in_straight = False         # 直引号开合状态
+
+    def _names(self) -> list[tuple[str, str]]:
+        adv = self._agent.engine.adventure
+        if adv is None:
+            return []
+        out = []
+        for n in adv.get("npcs", []):
+            voice = n.get("voice")
+            if not voice:
+                continue
+            for alias in _npc_aliases(n["name"]):
+                if len(alias) >= 2:
+                    out.append((alias, voice))
+        # 长名优先，避免「三娘」抢在「燕三娘」前命中
+        out.sort(key=lambda t: -len(t[0]))
+        return out
+
+    def _attribute(self) -> str | None:
+        tail = "".join(self._tail[-_ATTR_TAIL_CHARS:])
+        best_pos, best_voice = -1, None
+        for alias, voice in self._names():
+            pos = tail.rfind(alias)
+            if pos > best_pos:
+                best_pos, best_voice = pos, voice
+        if best_voice is None:
+            return None
+        # 名字之后要出现说话动词或冒号，否则可能只是提到 NPC（招牌「龙门客栈」）
+        after = tail[best_pos:]
+        if not (_SPEECH_VERB_RE.search(after) or "：" in after or ":" in after):
+            return None
+        return best_voice
+
+    def feed(self, text: str) -> str:
+        """处理一段已改写文本（标记之外的普通字符流），必要时注入 ⟦v:⟧。"""
+        out: list[str] = []
+        for ch in text:
+            is_open = ch in _QUOTE_OPEN_CHARS
+            if ch in _QUOTE_TOGGLE_CHARS:
+                is_open = not self._in_straight
+                self._in_straight = not self._in_straight
+            if ch in _QUOTE_CLOSE_CHARS:
+                self._in_straight = False
+            if is_open and self._since_tag > _ATTR_TAG_GAP:
+                voice = self._attribute()
+                if voice:
+                    print(f"[game] 无标记台词自动归属 → {voice}"
+                          f"（上下文 …{''.join(self._tail[-12:])}）")
+                    out.append(f"⟦v:{voice}⟧")
+                    self._since_tag = 0
+            out.append(ch)
+            self._tail.append(ch)
+            if len(self._tail) > 64:
+                del self._tail[:32]
+            self._since_tag += 1
+        return "".join(out)
+
+    def mark_tag(self) -> None:
+        self._since_tag = 0
+
 
 class GameAgent:
     def __init__(self, cfg: dict, llm):
@@ -288,10 +365,12 @@ class GameAgent:
         """流式过滤器：把 LLM 写的 ⟦s:...⟧ 标记改写成声线 id，未闭合标记丢弃。
 
         非 str 事件（tool_calls 字典）原样透传；改写后的文本才进 history，
-        与玩家实际听到的一致。
+        与玩家实际听到的一致。LLM 没写标记的引号台词由 _QuoteAttributor
+        按「NPC 名 + 说话动词/冒号」确定性归属，不再依赖模型自觉。
         """
         buf = ""
         in_tag = False
+        attr = _QuoteAttributor(self)
         async for ev in stream:
             if not isinstance(ev, str):
                 buf, in_tag = "", False
@@ -301,24 +380,27 @@ class GameAgent:
             for ch in ev:
                 if in_tag:
                     if ch == "⟧":
-                        out.append(self._rewrite_tag(buf))
+                        tag = self._rewrite_tag(buf)
+                        if tag:
+                            out.append(tag)
+                            attr.mark_tag()
                         buf, in_tag = "", False
                     else:
                         buf += ch
                 elif ch == "⟦":
                     if buf:
-                        out.append(buf)
+                        out.append(attr.feed(buf))
                         buf = ""
                     in_tag = True
                 else:
                     buf += ch
             if buf and not in_tag:
-                out.append(buf)
+                out.append(attr.feed(buf))
                 buf = ""
             if out:
                 yield "".join(out)
         if buf and not in_tag:
-            yield buf
+            yield attr.feed(buf)
 
     async def respond(self, messages: list[dict],
                       gen_id: int) -> AsyncIterator[str]:

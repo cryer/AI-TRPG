@@ -457,6 +457,9 @@ class CosyVoiceTTS:
         seq = 0
         chunk_bytes = self.sample_rate * 2 * CHUNK_MS // 1000
         async for text, voice_id, emotion in self._segment_stream(sentences):
+            # 批次级日志：对局排障的直接证据（声线归属/重复合成都能从这看出来）
+            print(f"[tts] 批次 voice={voice_id} e={emotion} "
+                  f"len={len(text)}: {text[:24]!r}")
             q: asyncio.Queue = asyncio.Queue()
             cancelled = False
 
