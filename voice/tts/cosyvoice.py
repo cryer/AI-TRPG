@@ -86,7 +86,7 @@ class CosyVoiceTTS:
                  cudnn_benchmark: bool = False,
                  emotions: list | None = None,
                  merge_max_chars: int = 150,
-                 merge_wait_s: float = 0.05,
+                 merge_wait_s: float = 0.4,
                  merge_head_chars: int = 48,
                  sample_top_p: float | None = None,
                  cuda_visible_devices: str | None = None,

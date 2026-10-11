@@ -67,7 +67,7 @@ async def main():
             for s in sentences:
                 yield s
                 if trickle:
-                    await asyncio.sleep(0.2)   # 上游没就绪 → 不合并
+                    await asyncio.sleep(0.6)   # 上游没就绪（>0.4s 宽限）→ 不合并
         return [seg async for seg in inst._segment_stream(gen(), state=state)]
 
     # 用户实锤场景：NPC 两句台词（引号跨句）→ 两句都应是 npc 声线
@@ -257,6 +257,22 @@ async def main():
     check("空 id 回默认", tts2._resolve_voice("") == "narrator_m")
     check("前缀规则优先于歧义", tts2._resolve_voice("female") == "npc_female")
     check("完全未知回默认", tts2._resolve_voice("robot") == "narrator_m")
+
+    print("== 5. 未知 NPC 名字的声线兜底（防整局剥光变旁白）==")
+    from game.agent import GameAgent
+    agent = GameAgent({}, None)   # 无对局（lobby）：名册查不到，走启发式
+    check("女性称呼 → npc_female",
+          agent._rewrite_tag("s:青衣女子 e:紧张") == "⟦v:npc_female e:紧张⟧")
+    check("年轻女性称呼 → npc_female_young",
+          agent._rewrite_tag("s:小姑娘") == "⟦v:npc_female_young⟧")
+    check("老年男性称呼 → npc_male_old",
+          agent._rewrite_tag("s:老乞丐 e:平静") == "⟦v:npc_male_old e:平静⟧")
+    check("年轻男性称呼 → npc_male_young",
+          agent._rewrite_tag("s:少年侠客") == "⟦v:npc_male_young⟧")
+    check("完全无法猜测 → 剥掉",
+          agent._rewrite_tag("s:机器人") == "")
+    check("旁白别名 → 旁白声线",
+          agent._rewrite_tag("s:旁白 e:神秘") == "⟦v:narrator_m e:神秘⟧")
 
     print("== 结果 ==")
     print("ALL OK" if FAIL == 0 else f"{FAIL} 项失败")

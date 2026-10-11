@@ -51,7 +51,7 @@ class VolcengineTTS:
                  speech_rate: int = 0,
                  voices: dict | None = None, emotions: dict | None = None,
                  emotion_scale: int | None = None,
-                 merge_max_chars: int = 150, merge_wait_s: float = 0.05,
+                 merge_max_chars: int = 150, merge_wait_s: float = 0.4,
                  merge_head_chars: int = 48):
         self.api_key = api_key or os.environ["VOLCENGINE_API_KEY"]
         # 兜底 speaker：标记缺失或声线 id 查不到映射时使用

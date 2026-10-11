@@ -64,10 +64,11 @@ _DM_BASE_RULES = (
     "调用 lookup_scene 查询，不要凭印象编造。"
     "打断处理：玩家可能随时打断你的叙述。被打断后不要重播整段，"
     "直接接住玩家的新意图继续（比如「好，你停在门口——你贴上门板仔细听……」）。"
-    "角色配音：系统会给不同角色配不同声线。NPC 开口说话时，在他的台词开头"
+    "角色配音：系统会给不同角色配不同声线。NPC 开口说话时，必须在他的台词开头"
     "紧挨着写 ⟦s:NPC名字 e:情绪⟧（名字严格用名册里的名字，标记后不换行直接跟台词），"
-    "台词必须用引号完整包住（「」或“”），说完及时合上引号；台词中间插了叙述、"
-    "NPC 接着再说时，新引号里的台词不用重复标记。"
+    "台词必须用引号完整包住（「」或“”），说完及时合上引号。"
+    "示例——燕三娘紧张地说：⟦s:燕三娘 e:紧张⟧「走你的镖，少管闲事。」"
+    "台词中间插了叙述、NPC 接着再说时，新引号里的台词不用重复标记。"
     "情绪从以下词里选最贴合当前语境的一个：{emotions}。不要编造名册之外的 NPC。"
     "情绪要连贯：同一个 NPC 在连续几句台词里沿用同一个情绪词，"
     "只有剧情明显转折才换，不要每句都换。标记只写 ⟦s:名字 e:情绪⟧ 这一种形式，"
@@ -76,8 +77,8 @@ _DM_BASE_RULES = (
     "只有当剧情氛围明显转变时（如发现尸体、危机降临、真相揭晓、转危为安），"
     "才在旁白段落开头写 ⟦s:旁白 e:情绪⟧ 切换氛围；同一氛围内不要每段都换，"
     "氛围恢复平常时用 ⟦s:旁白 e:平静⟧ 收回来。"
-    "⟦s:旁白⟧只能标记没有引号的叙述段落，绝不能写在任何 NPC 的引号台词前——"
-    "NPC 台词的标记只能用 NPC 自己的名字。"
+    "⟦s:旁白⟧只标记纯叙述段落（没有任何引号的段落）；引号台词前的标记"
+    "只能是 ⟦s:NPC名字⟧，绝不是 ⟦s:旁白⟧。"
     "语音约束：你的所有回复都会被语音合成朗读出来。口语化叙述，单次回复"
     "不超过五六句话（开场白和结局可以稍长）；不要使用 Markdown、列表、表情符号。"
 )
@@ -137,7 +138,9 @@ def dm_prompt(engine: GameEngine, memory: ConversationMemory | None = None,
             f"；秘密（DM 私信，按剧本节奏透露）: "
             + "；".join(n.get("secrets", []))
             for n in adv["npcs"])
-        parts.append("【NPC 名册】（扮演时恪守各自性格与秘密）\n" + npc_lines)
+        parts.append("【NPC 名册】（扮演时恪守各自性格与秘密；任何 NPC 开口说话时，"
+                     "台词必须以 ⟦s:名册名字 e:情绪⟧ 开头，否则玩家听到的是旁白声线）\n"
+                     + npc_lines)
     if memory is not None and memory.summary:
         parts.append("【剧情回顾摘要】（早期剧情的压缩记录；细节可用 lookup_scene 补查）\n"
                      + memory.summary)
@@ -172,6 +175,25 @@ def _npc_aliases(full_name: str) -> set[str]:
     if m:
         aliases.update((m.group(1), m.group(2)))
     return aliases
+
+
+# 未登记名字的性别/年龄关键词兜底：LLM 偶尔用叙述称呼写标记（⟦s:青衣女子⟧），
+# 名册查不到就按称呼关键词猜一个声线，总比剥掉后掉成旁白强（真人局实锤：
+# 整局标记全被剥光，所有 NPC 都变成了旁白音色）
+_FEMALE_HINTS = ("女", "娘", "姐", "妹", "婆", "姑", "妃", "公主", "寡妇", "夫人", "小姐")
+_OLD_HINTS = ("老", "翁", "叟", "丐", "爷", "伯", "掌柜", "长者")
+_YOUNG_HINTS = ("少", "孩", "童", "小子", "青年", "姑娘", "丫头", "小姐")
+
+
+def _guess_voice(name: str) -> str | None:
+    if any(k in name for k in _FEMALE_HINTS):
+        return ("npc_female_young" if any(k in name for k in _YOUNG_HINTS)
+                else "npc_female")
+    if any(k in name for k in _OLD_HINTS):
+        return "npc_male_old"
+    if any(k in name for k in _YOUNG_HINTS):
+        return "npc_male_young"
+    return None
 
 
 # ⟦s:旁白 e:情绪⟧ 的名字别名：映射到旁白声线（DM 规则约定旁白氛围切换标记）
@@ -252,6 +274,14 @@ class GameAgent:
             voice = (adv or {}).get("narrator_voice") or self._cfg_narrator_voice
             return f"⟦v:{voice}{emotion}⟧"
         voice = self._npc_voice(name)
+        if voice is None:
+            voice = _guess_voice(name)
+            if voice:
+                print(f"[warn] NPC 标记 {name!r} 不在名册，按称呼关键词"
+                      f"兜底声线 {voice}")
+            else:
+                print(f"[warn] NPC 标记 {name!r} 不在名册且无法猜测，标记被剥掉"
+                      f"（该段台词将用旁白声线）")
         return f"⟦v:{voice}{emotion}⟧" if voice else ""
 
     async def _voice_rewrite(self, stream) -> AsyncIterator:

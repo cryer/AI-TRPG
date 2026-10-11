@@ -50,7 +50,7 @@
     "cudnn_benchmark": false,
     "speed": 1.0,
     "merge_max_chars": 150,
-    "merge_wait_s": 0.4,
+    "merge_wait_s": 0.5,
     "emotions": [
       "平静",
       "紧张",
@@ -132,7 +132,7 @@
       "温柔": "tender",
       "威严": "coldness"
     },
-    "merge_wait_s": 0.4,
+    "merge_wait_s": 0.5,
     "merge_head_chars": 48
   },
   "game": {

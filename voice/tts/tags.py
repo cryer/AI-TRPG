@@ -54,7 +54,7 @@ def resolve_voice_id(voice_id: str, registered, default: str) -> str:
 async def segment_stream(
         sentences,
         merge_max_chars: int = 150,
-        merge_wait_s: float = 0.05,
+        merge_wait_s: float = 0.4,
         narrator_voice: str = "",
         state: dict | None = None,
         merge_head_chars: int = 0,
