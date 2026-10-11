@@ -405,6 +405,10 @@ class CosyVoiceTTS:
             return
         with self._lock:
             self._sweep_abandoned(model.model)   # 清上次 barge-in 的残留
+            if emotion and len(norm) <= 4:
+                # 超短片段（「边军？」「好。」）带情绪 instruct 会把两三字
+                # 拉成拖长音（真人局实锤），短句用声线默认语气更稳
+                emotion = None
             tpl = self._get_template(voice_id, emotion)
             text_token, text_token_len = frontend._extract_text_token(norm)
             model_input = {**tpl, "text": text_token, "text_len": text_token_len}

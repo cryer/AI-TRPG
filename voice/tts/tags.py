@@ -51,6 +51,16 @@ def resolve_voice_id(voice_id: str, registered, default: str) -> str:
     return default
 
 
+# 无标记新引号的声线继承先缓冲试探：引号内 ≤_INHERIT_MIN_CHARS 字且没有
+# 句末标点（。？！…）的几乎都是叙述里的引用/强调（那声「边军」）而非真
+# 台词——继承 NPC 声线会把这两三个字抠出来单独合成（超短文本 + 情绪
+# instruct → 拖长音 artifacts），还把旁白批次从中间劈断（真人局实锤）。
+# 带句末标点（「还有谁在里面？」）或超长（>_INHERIT_PROBE_CHARS 还没合上
+# 引号）认定为真台词，按继承声线流出。
+_INHERIT_PROBE_CHARS = 12
+_INHERIT_MIN_CHARS = 8
+
+
 async def segment_stream(
         sentences,
         merge_max_chars: int = 150,
@@ -120,9 +130,33 @@ async def segment_stream(
     def current_cap() -> int:
         return merge_max_chars if head_done else min(head_cap, merge_max_chars)
 
+    def emit_text(text: str, key) -> list[tuple[str, str, str | None]]:
+        """把一段文本按 key 并入合成缓冲，返回凑满/换声线而完成的批次。"""
+        nonlocal buf_key, head_done
+        done = []
+        if buf and key != buf_key:
+            done.append(("".join(buf), buf_key[0], buf_key[1]))
+            buf.clear()
+            head_done = True
+        if not buf:
+            buf_key = key
+        buf.append(text)
+        if sum(len(t) for t in buf) >= current_cap():
+            done.append(("".join(buf), buf_key[0], buf_key[1]))
+            buf.clear()
+            head_done = True
+        return done
+
+    inherit_buf: list[str] | None = None   # 无标记引号的试探缓冲（见上方常量注释）
+
     while True:
         raw = await pull(block=not buf)
         if raw is None:
+            if inherit_buf:
+                # 引号没合上就到句尾/流尾：按继承声线放行，别吞掉文本
+                for b in emit_text("".join(inherit_buf), quote_voice):
+                    yield b
+                inherit_buf = None
             if buf:
                 yield "".join(buf), buf_key[0], buf_key[1]
                 buf = []
@@ -146,22 +180,53 @@ async def segment_stream(
                         last_voice = explicit
                         if in_quote:
                             quote_voice = explicit
+                            # 引号内来了显式标记：试探缓冲立即按新声线放行
+                            if inherit_buf:
+                                for b in emit_text("".join(inherit_buf),
+                                                   quote_voice):
+                                    yield b
+                                inherit_buf = None
                 continue
             if tok in _QUOTE_TOGGLE:
                 # 直引号：同一字符按当前状态切换开/合
                 tok = "“" if not in_quote else "”"
             if tok in _QUOTE_OPEN:
                 in_quote = True
-                quote_voice = explicit if explicit[0] else last_voice
-                explicit = ("", None)
+                if explicit[0]:
+                    quote_voice = explicit
+                    explicit = ("", None)
+                    inherit_buf = None
+                else:
+                    # 无标记新引号：先缓冲试探，短引用不继承 NPC 声线
+                    quote_voice = last_voice
+                    inherit_buf = []
                 continue
             if tok in _QUOTE_CLOSE:
                 in_quote = False
+                if inherit_buf is not None:
+                    inner = "".join(inherit_buf)
+                    inherit_buf = None
+                    if inner.strip():
+                        # 短引用/强调（那声「边军」）：短且无句末标点 →
+                        # 回旁白氛围，不继承 NPC 声线、不单独成批
+                        is_quote = len(inner) <= _INHERIT_MIN_CHARS \
+                            and not re.search(r"[。？！…?!]", inner)
+                        key = (("", state.get("narrator_emotion"))
+                               if is_quote else quote_voice)
+                        for b in emit_text(inner, key):
+                            yield b
                 quote_voice = ("", None)
                 explicit = ("", None)
                 continue
             text = _TAG_STRIP_RE.sub("", tok)
             if not text.strip():
+                continue
+            if in_quote and inherit_buf is not None:
+                inherit_buf.append(text)
+                if sum(len(t) for t in inherit_buf) > _INHERIT_PROBE_CHARS:
+                    for b in emit_text("".join(inherit_buf), quote_voice):
+                        yield b
+                    inherit_buf = None
                 continue
             if in_quote:
                 key = quote_voice
@@ -170,17 +235,8 @@ async def segment_stream(
             else:
                 # 无标记旁白：沿用旁白氛围情绪（默认 None = 声线自带 instruct）
                 key = ("", state.get("narrator_emotion"))
-            if buf and key != buf_key:
-                yield "".join(buf), buf_key[0], buf_key[1]
-                buf = []
-                head_done = True
-            if not buf:
-                buf_key = key
-            buf.append(text)
-            if sum(len(t) for t in buf) >= current_cap():
-                yield "".join(buf), buf_key[0], buf_key[1]
-                buf = []
-                head_done = True
+            for b in emit_text(text, key):
+                yield b
         # 句边界：引号未开时声线标记作废——「⟦v:x⟧ 无引号台词。」只允许
         # 影响本句，防止 NPC 声线/情绪泄漏进后续旁白
         if not in_quote:

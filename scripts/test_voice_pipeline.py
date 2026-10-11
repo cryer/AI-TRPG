@@ -161,6 +161,34 @@ async def main():
     check("标记切换优先于继承", [v for _, v, _ in segs8] ==
           ["npc_male_old", "npc_female"], detail=str(segs8))
 
+    print("== 3c. 叙述内短引用不继承 NPC 声线（拖长音修复）==")
+    # 真人局实锤（turn 10）：叙述里引用一词「边军」，旧状态机把它按上一个
+    # NPC 声线抠成 2 字独立批次 → 超短文本 + 低语 instruct → 拖长音 artifacts
+    segs_q = await segments_of([
+        "⟦v:npc_female e:低语⟧「你押药材去边关……苏擎的关？」",
+        "她不再停留，青衣一闪。",
+        "可你方才那声「边军」，",
+        "像石子投进深潭。",
+    ])
+    npc_q = [t for t, v, e in segs_q if v == "npc_female"]
+    check("真台词仍是 NPC 声线", any("边关" in t for t in npc_q),
+          detail=str(segs_q))
+    check("短引用没有抠成 NPC 独立批次",
+          not any("边军" in t and "边关" not in t for t in npc_q),
+          detail=str(segs_q))
+    check("短引用并入旁白批次（批次不被劈断）",
+          any(v == "" and "那声边军，像石子投进深潭" in t
+              for t, v, e in segs_q), detail=str(segs_q))
+    # 长一点的无标记引号仍是真台词 → 继承不变
+    segs_q2 = await segments_of([
+        "⟦v:npc_female⟧「我先走了。」",
+        "她想了想，又回头说：",
+        "「这件事你千万别告诉第二个人。」",
+    ])
+    check("长无标记引号仍继承 NPC 声线",
+          any(v == "npc_female" and "千万别告诉第二个人" in t
+              for t, v, e in segs_q2), detail=str(segs_q2))
+
     print("== 3b. 直引号台词 / 声线泄漏防护 / 旁白情绪记忆 ==")
     tts_n = CosyVoiceTTS(default_voice="narrator_m")
 
